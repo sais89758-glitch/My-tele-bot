@@ -346,9 +346,11 @@ async def channel_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     
-    # Error fix: Application building without complex updater attributes
+    # Render Fix: Use a more direct application building approach
+    # Avoids internal Updater attribute issues in certain environments
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Manual check: Application needs to handle specific setup
     pay_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_payment, pattern="^(join_vip|pay_single_)")],
         states={UPLOAD_RECEIPT: [MessageHandler(filters.PHOTO, confirm_receipt)]},
@@ -363,8 +365,12 @@ def main():
     application.add_handler(pay_handler)
     application.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.VIDEO, channel_listener))
     
-    # Run using polling
-    application.run_polling(drop_pending_updates=True)
+    # Start the bot
+    print("Bot started...")
+    application.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.critical(f"Fatal error: {e}")
