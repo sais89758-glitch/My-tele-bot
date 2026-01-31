@@ -116,7 +116,6 @@ async def verify_receipt_with_ai(photo_bytes, expected_amount):
     Expected amount is {expected_amount} MMK.
     """
     
-    # Using Gemini 1.5 Flash for fast and accurate receipt analysis
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{
@@ -168,7 +167,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    page = int(query.data.split("_")[-1])
+    page_str = query.data.split("_")[-1]
+    page = int(page_str) if page_str.isdigit() else 1
+    
     movies = db_query("SELECT id, title, price FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", ((page-1)*6,))
     
     if not movies:
@@ -244,7 +245,6 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.now().strftime("%Y-%m-%d")
 
     if result.get('is_valid') and result.get('amount', 0) >= expected:
-        # Success Handling
         if context.user_data['p_type'] == 'vip':
             expiry = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
             db_query("UPDATE users SET is_vip=1, vip_expiry=? WHERE user_id=?", (expiry, user.id))
@@ -256,7 +256,6 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await loading_msg.edit_text("✅ ငွေလက်ခံရရှိမှု အတည်ပြုပြီးပါပြီ။ စိတ်ကြိုက်ကြည့်ရှုနိုင်ပါပြီ။")
     else:
-        # Scam or Failure Handling
         is_scam = result.get('is_scam', False)
         status = 'scam' if is_scam else 'failed'
         db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, 0, 'scam', today, status))
@@ -270,7 +269,6 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await loading_msg.edit_text(fail_text)
         
-        # Admin Notification
         alert_text = (
             f"⚠️ **Scam Alert!**\n"
             f"User: {user.full_name} (@{user.username})\n"
@@ -293,7 +291,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month_start = now.replace(day=1).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
     
-    # Statistics Generation
     total_vip_members = db_query("SELECT COUNT(*) FROM users WHERE is_vip=1", fetchone=True)[0]
     vip_joined_today = db_query("SELECT COUNT(*) FROM transactions WHERE type='vip' AND date=? AND status='success'", (today,), fetchone=True)[0]
     
@@ -304,8 +301,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         WHERE t.type='single' AND t.date=? AND t.status='success' 
         GROUP BY m.id
     """, (today,))
-    
-    total_single_buyers = db_query("SELECT COUNT(DISTINCT user_id) FROM purchases", fetchone=True)[0]
     
     scams_today = db_query("SELECT COUNT(*) FROM transactions WHERE status='scam' AND date=?", (today,), fetchone=True)[0]
     total_banned = db_query("SELECT COUNT(*) FROM users WHERE is_scammer=1", fetchone=True)[0]
@@ -321,24 +316,23 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📅 Today: {today}\n\n"
         f"💰 **Revenue (MMK):**\n- ယနေ့ဝင်ငွေ: {rev_today} Ks\n- ယခုလစုစုပေါင်း: {rev_month} Ks\n\n"
         f"👑 **VIP Membership:**\n- ယနေ့ဝင်သူ: {vip_joined_today}\n- စုစုပေါင်း VIP: {total_vip_members}\n\n"
-        f"🎬 **ဇာတ်ကားဝယ်ယူသူများ (ယနေ့):**\n"
+        f"🎬 **ဇာတ်ကားဝယ်ယူမှု (ယနေ့):**\n"
     )
     for movie in movie_sales_today:
         report += f"- {movie[0]}: {movie[1]} ယောက်\n"
     
     report += (
-        f"\n👥 **Traffic:**\n- ယနေ့လာကြည့်သူ (မဝယ်သူအပါ): {visitors_today}\n- စုစုပေါင်း Visitor: {total_visitors}\n\n"
+        f"\n👥 **Traffic:**\n- ယနေ့ Visitor: {visitors_today}\n- စုစုပေါင်း Visitor: {total_visitors}\n\n"
         f"🚫 **Security:**\n- ယနေ့ Scam မိသူ: {scams_today}\n- စုစုပေါင်း Ban ထားသူ: {total_banned}"
     )
     await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
 
 # ==========================================
-# CHANNEL SYNC & MAIN
+# CHANNEL SYNC
 # ==========================================
 async def channel_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post
-    if msg.video and msg.caption:
-        # Example caption: "Movie Title \n #500MMK"
+    if msg and msg.video and msg.caption:
         price_match = re.search(r"#(\d+)MMK", msg.caption)
         if price_match:
             price = int(price_match.group(1))
@@ -346,9 +340,14 @@ async def channel_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db_query("INSERT INTO movies (file_id, title, price, added_date) VALUES (?,?,?,?)", 
                      (msg.video.file_id, title, price, datetime.now().strftime("%Y-%m-%d")))
 
+# ==========================================
+# MAIN
+# ==========================================
 def main():
     init_db()
-    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # Error fix: Application building without complex updater attributes
+    application = Application.builder().token(BOT_TOKEN).build()
     
     pay_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_payment, pattern="^(join_vip|pay_single_)")],
@@ -356,15 +355,16 @@ def main():
         fallbacks=[CommandHandler("start", start)]
     )
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("saizawyelwin", admin_stats))
-    app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
-    app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
-    app.add_handler(CallbackQueryHandler(view_details, pattern="^view_"))
-    app.add_handler(pay_handler)
-    app.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.VIDEO, channel_listener))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("saizawyelwin", admin_stats))
+    application.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
+    application.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
+    application.add_handler(CallbackQueryHandler(view_details, pattern="^view_"))
+    application.add_handler(pay_handler)
+    application.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.VIDEO, channel_listener))
     
-    app.run_polling()
+    # Run using polling
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
