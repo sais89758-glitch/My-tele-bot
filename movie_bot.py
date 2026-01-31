@@ -4,6 +4,7 @@ import re
 import asyncio
 import json
 import requests
+import os
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -11,8 +12,7 @@ from typing import Final
 from telegram import (
     Update, 
     InlineKeyboardButton, 
-    InlineKeyboardMarkup,
-    InputMediaPhoto
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
     Application,
@@ -28,11 +28,11 @@ from telegram.constants import ParseMode
 # ==========================================
 # CONFIGURATION
 # ==========================================
+# Note: On Render/Production, it is safer to use os.environ.get('BOT_TOKEN')
 BOT_TOKEN: Final = "8515688348:AAE0a7XcOIfRF9DJfrbdLNFsnJxPJFem18o" 
-ADMIN_ID: Final = 6445257462               
+ADMIN_ID: Final = 6445257462              
 CHANNEL_ID: Final = "@ZanchannelMM" 
 DB_NAME: Final = "movie_database.db"
-# Gemini API Key (Provided by user)
 GEMINI_API_KEY: Final = "AIzaSyA5y7nWKVSHSALeKSrG1fiTBTB0hdWUZtk" 
 
 # VIP Pricing
@@ -41,68 +41,81 @@ VIP_PRICE: Final = 10000
 # Conversation State
 UPLOAD_RECEIPT = 1
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Logging Setup
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # DATABASE SETUP
 # ==========================================
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    # Users Table
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        full_name TEXT,
-        is_vip BOOLEAN DEFAULT 0,
-        vip_expiry DATE,
-        joined_date DATE,
-        is_scammer BOOLEAN DEFAULT 0
-    )''')
-    # Movies Table
-    c.execute('''CREATE TABLE IF NOT EXISTS movies (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_id TEXT,
-        title TEXT,
-        price INTEGER,
-        added_date DATE
-    )''')
-    # Purchases Table (Lifetime Access)
-    c.execute('''CREATE TABLE IF NOT EXISTS purchases (
-        user_id INTEGER,
-        movie_id INTEGER,
-        PRIMARY KEY (user_id, movie_id)
-    )''')
-    # Transactions Table (For Stats & Tracking)
-    c.execute('''CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        amount INTEGER,
-        type TEXT, -- 'vip' or 'single'
-        movie_id INTEGER,
-        date DATE,
-        status TEXT -- 'success' or 'scam' or 'failed'
-    )''')
-    # Visitor Log (For non-buyers count)
-    c.execute('''CREATE TABLE IF NOT EXISTS visitors (
-        user_id INTEGER,
-        date DATE,
-        PRIMARY KEY (user_id, date)
-    )''')
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        # Users Table
+        c.execute('''CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            is_vip BOOLEAN DEFAULT 0,
+            vip_expiry DATE,
+            joined_date DATE,
+            is_scammer BOOLEAN DEFAULT 0
+        )''')
+        # Movies Table
+        c.execute('''CREATE TABLE IF NOT EXISTS movies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id TEXT,
+            title TEXT,
+            price INTEGER,
+            added_date DATE
+        )''')
+        # Purchases Table (Lifetime Access)
+        c.execute('''CREATE TABLE IF NOT EXISTS purchases (
+            user_id INTEGER,
+            movie_id INTEGER,
+            PRIMARY KEY (user_id, movie_id)
+        )''')
+        # Transactions Table
+        c.execute('''CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            amount INTEGER,
+            type TEXT, 
+            movie_id INTEGER,
+            date DATE,
+            status TEXT
+        )''')
+        # Visitor Log
+        c.execute('''CREATE TABLE IF NOT EXISTS visitors (
+            user_id INTEGER,
+            date DATE,
+            PRIMARY KEY (user_id, date)
+        )''')
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully.")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
 
 def db_query(query, args=(), fetchone=False, commit=True):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(query, args)
-    if commit: conn.commit()
-    data = c.fetchone() if fetchone else c.fetchall()
-    conn.close()
-    return data
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute(query, args)
+        if commit: conn.commit()
+        data = c.fetchone() if fetchone else c.fetchall()
+        conn.close()
+        return data
+    except Exception as e:
+        logger.error(f"Database Query Error: {e}")
+        return None
 
 # ==========================================
-# AI RECEIPT CHECKER (GEMINI 1.5 FLASH)
+# AI RECEIPT CHECKER
 # ==========================================
 async def verify_receipt_with_ai(photo_bytes, expected_amount):
     import base64
@@ -116,6 +129,7 @@ async def verify_receipt_with_ai(photo_bytes, expected_amount):
     Expected amount is {expected_amount} MMK.
     """
     
+    # Updated Model Name to avoid deprecation issues if possible, keeping user's choice
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{
@@ -129,11 +143,17 @@ async def verify_receipt_with_ai(photo_bytes, expected_amount):
     
     try:
         response = requests.post(url, json=payload, timeout=25)
+        if response.status_code != 200:
+            logger.error(f"Gemini API Error: {response.text}")
+            return {"is_valid": False, "amount": 0, "is_scam": False}
+            
         result = response.json()
-        text_res = result['candidates'][0]['content']['parts'][0]['text']
-        return json.loads(text_res)
+        if 'candidates' in result and result['candidates']:
+            text_res = result['candidates'][0]['content']['parts'][0]['text']
+            return json.loads(text_res)
+        return {"is_valid": False, "amount": 0, "is_scam": False}
     except Exception as e:
-        logging.error(f"AI Verification Error: {e}")
+        logger.error(f"AI Verification Exception: {e}")
         return {"is_valid": False, "amount": 0, "is_scam": False}
 
 # ==========================================
@@ -167,36 +187,81 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+    
     page_str = query.data.split("_")[-1]
     page = int(page_str) if page_str.isdigit() else 1
     
-    movies = db_query("SELECT id, title, price FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", ((page-1)*6,))
+    # Pagination Logic
+    offset = (page - 1) * 6
+    movies = db_query("SELECT id, title, price FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", (offset,))
     
     if not movies:
-        await query.answer("ဇာတ်ကားများ မရှိသေးပါ။")
+        if page == 1:
+            await query.message.edit_text("ဇာတ်ကားများ မရှိသေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="start_back")]]))
+        else:
+            await query.answer("နောက်ထပ် ဇာတ်ကားများ မရှိပါ", show_alert=True)
         return
 
     keyboard = []
     for m in movies:
         keyboard.append([InlineKeyboardButton(f"{m[1]} - {m[2]} Ks", callback_data=f"view_{m[0]}")])
     
-    nav = [InlineKeyboardButton("🔙 Back", callback_data="start_back")]
-    if len(movies) == 6: nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"movie_menu_{page+1}"))
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"movie_menu_{page-1}"))
+    
+    nav.append(InlineKeyboardButton("🔙 Home", callback_data="start_back"))
+    
+    # Check if there is a next page
+    next_check = db_query("SELECT id FROM movies LIMIT 1 OFFSET ?", (offset + 6,), fetchone=True)
+    if next_check:
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"movie_menu_{page+1}"))
+        
     keyboard.append(nav)
     
-    await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    try:
+        await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        # Ignore error if message is not modified
+        pass
 
 async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+    
     m_id = int(query.data.split("_")[-1])
     movie = db_query("SELECT * FROM movies WHERE id=?", (m_id,), fetchone=True)
+    
+    if not movie:
+        await query.message.reply_text("Movie not found.")
+        return
+
     user_id = query.from_user.id
     
+    # Check Access
     is_vip = db_query("SELECT is_vip FROM users WHERE user_id=? AND is_vip=1", (user_id,), fetchone=True)
     has_bought = db_query("SELECT * FROM purchases WHERE user_id=? AND movie_id=?", (user_id, m_id), fetchone=True)
 
+    # Check VIP Expiry
+    if is_vip:
+        expiry_date_str = db_query("SELECT vip_expiry FROM users WHERE user_id=?", (user_id,), fetchone=True)[0]
+        if expiry_date_str:
+            expiry_date = datetime.strptime(expiry_date_str, "%Y-%m-%d")
+            if datetime.now() > expiry_date:
+                is_vip = False
+                db_query("UPDATE users SET is_vip=0 WHERE user_id=?", (user_id,))
+
     if is_vip or has_bought:
-        await context.bot.send_video(chat_id=user_id, video=movie[1], caption=f"🎬 {movie[2]}\n\n✅ စိတ်ကြိုက်ကြည့်ရှုနိုင်ပါပြီ။", protect_content=True)
+        try:
+            await context.bot.send_video(
+                chat_id=user_id, 
+                video=movie[1], 
+                caption=f"🎬 {movie[2]}\n\n✅ စိတ်ကြိုက်ကြည့်ရှုနိုင်ပါပြီ။", 
+                protect_content=True
+            )
+        except Exception as e:
+            await query.message.reply_text(f"Error sending video: {e}")
     else:
         text = f"🎬 **{movie[2]}**\n💰 ဈေးနှုန်း: **{movie[3]} MMK**"
         keyboard = [
@@ -211,11 +276,19 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 async def start_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+    
     data = query.data
     context.user_data['p_type'] = 'vip' if 'join_vip' in data else 'single'
-    if 'pay_single_' in data: context.user_data['m_id'] = int(data.split("_")[-1])
+    if 'pay_single_' in data: 
+        context.user_data['m_id'] = int(data.split("_")[-1])
     
-    expected = VIP_PRICE if context.user_data['p_type'] == 'vip' else db_query("SELECT price FROM movies WHERE id=?", (context.user_data['m_id'],), fetchone=True)[0]
+    if context.user_data['p_type'] == 'vip':
+        expected = VIP_PRICE
+    else:
+        mov_data = db_query("SELECT price FROM movies WHERE id=?", (context.user_data['m_id'],), fetchone=True)
+        expected = mov_data[0] if mov_data else 0
+
     context.user_data['expected_amount'] = expected
 
     pay_text = (
@@ -236,48 +309,65 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပုံကိုသာ ပို့ပေးပါ။")
         return UPLOAD_RECEIPT
 
+    # Get the largest photo
     photo = await update.message.photo[-1].get_file()
     photo_bytes = await photo.download_as_bytearray()
-    expected = context.user_data['expected_amount']
+    
+    expected = context.user_data.get('expected_amount', 0)
     
     loading_msg = await update.message.reply_text("🔍 AI စနစ်ဖြင့် ပြေစာအား စစ်ဆေးနေပါသည်...")
+    
+    # Call Gemini
     result = await verify_receipt_with_ai(photo_bytes, expected)
     today = datetime.now().strftime("%Y-%m-%d")
 
+    # Check Result
     if result.get('is_valid') and result.get('amount', 0) >= expected:
         if context.user_data['p_type'] == 'vip':
             expiry = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
             db_query("UPDATE users SET is_vip=1, vip_expiry=? WHERE user_id=?", (expiry, user.id))
-            db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, expected, 'vip', today, 'success'))
+            db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", 
+                     (user.id, expected, 'vip', today, 'success'))
         else:
             m_id = context.user_data['m_id']
             db_query("INSERT OR IGNORE INTO purchases (user_id, movie_id) VALUES (?,?)", (user.id, m_id))
-            db_query("INSERT INTO transactions (user_id, amount, type, movie_id, date, status) VALUES (?,?,?,?,?,?)", (user.id, expected, 'single', m_id, today, 'success'))
+            db_query("INSERT INTO transactions (user_id, amount, type, movie_id, date, status) VALUES (?,?,?,?,?,?)", 
+                     (user.id, expected, 'single', m_id, today, 'success'))
         
         await loading_msg.edit_text("✅ ငွေလက်ခံရရှိမှု အတည်ပြုပြီးပါပြီ။ စိတ်ကြိုက်ကြည့်ရှုနိုင်ပါပြီ။")
     else:
         is_scam = result.get('is_scam', False)
         status = 'scam' if is_scam else 'failed'
-        db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, 0, 'scam', today, status))
+        db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", 
+                 (user.id, 0, 'scam', today, status))
         
         fail_text = "❌ ငွေလွဲမှု မအောင်မြင်ပါ။ "
         if result.get('amount', 0) < expected and not is_scam:
             fail_text += f"ငွေပမာဏ {result.get('amount')} သာရှိပြီး လိုအပ်သည်ထက် နည်းနေပါသည်။"
         else:
             fail_text += "ပြေစာသည် မှန်ကန်မှုမရှိခြင်း (သို့) ပုံစံမမှန်ခြင်း (Scam) ဖြစ်နိုင်ပါသည်။"
-            db_query("UPDATE users SET is_scammer=1 WHERE user_id=?", (user.id,))
+            if is_scam:
+                db_query("UPDATE users SET is_scammer=1 WHERE user_id=?", (user.id,))
         
         await loading_msg.edit_text(fail_text)
         
+        # Admin Alert
         alert_text = (
-            f"⚠️ **Scam Alert!**\n"
+            f"⚠️ **Payment Failed / Scam Alert!**\n"
             f"User: {user.full_name} (@{user.username})\n"
             f"ID: `{user.id}`\n"
-            f"Detected Amount: {result.get('amount')} MMK\n"
+            f"Detected: {result.get('amount')} MMK\n"
             f"Status: {status.upper()}"
         )
-        await context.bot.send_message(chat_id=ADMIN_ID, text=alert_text)
+        try:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=alert_text)
+        except Exception:
+            pass
 
+    return ConversationHandler.END
+
+async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Process canceled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="start_back")]]))
     return ConversationHandler.END
 
 # ==========================================
@@ -291,8 +381,8 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month_start = now.replace(day=1).strftime("%Y-%m-%d")
     today = now.strftime("%Y-%m-%d")
     
-    total_vip_members = db_query("SELECT COUNT(*) FROM users WHERE is_vip=1", fetchone=True)[0]
-    vip_joined_today = db_query("SELECT COUNT(*) FROM transactions WHERE type='vip' AND date=? AND status='success'", (today,), fetchone=True)[0]
+    total_vip_members = db_query("SELECT COUNT(*) FROM users WHERE is_vip=1", fetchone=True)[0] or 0
+    vip_joined_today = db_query("SELECT COUNT(*) FROM transactions WHERE type='vip' AND date=? AND status='success'", (today,), fetchone=True)[0] or 0
     
     movie_sales_today = db_query("""
         SELECT m.title, COUNT(*) 
@@ -302,11 +392,11 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         GROUP BY m.id
     """, (today,))
     
-    scams_today = db_query("SELECT COUNT(*) FROM transactions WHERE status='scam' AND date=?", (today,), fetchone=True)[0]
-    total_banned = db_query("SELECT COUNT(*) FROM users WHERE is_scammer=1", fetchone=True)[0]
+    scams_today = db_query("SELECT COUNT(*) FROM transactions WHERE status='scam' AND date=?", (today,), fetchone=True)[0] or 0
+    total_banned = db_query("SELECT COUNT(*) FROM users WHERE is_scammer=1", fetchone=True)[0] or 0
     
-    visitors_today = db_query("SELECT COUNT(*) FROM visitors WHERE date=?", (today,), fetchone=True)[0]
-    total_visitors = db_query("SELECT COUNT(DISTINCT user_id) FROM visitors", fetchone=True)[0]
+    visitors_today = db_query("SELECT COUNT(*) FROM visitors WHERE date=?", (today,), fetchone=True)[0] or 0
+    total_visitors = db_query("SELECT COUNT(DISTINCT user_id) FROM visitors", fetchone=True)[0] or 0
     
     rev_today = db_query("SELECT SUM(amount) FROM transactions WHERE date=? AND status='success'", (today,), fetchone=True)[0] or 0
     rev_month = db_query("SELECT SUM(amount) FROM transactions WHERE date >= ? AND status='success'", (month_start,), fetchone=True)[0] or 0
@@ -318,8 +408,11 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👑 **VIP Membership:**\n- ယနေ့ဝင်သူ: {vip_joined_today}\n- စုစုပေါင်း VIP: {total_vip_members}\n\n"
         f"🎬 **ဇာတ်ကားဝယ်ယူမှု (ယနေ့):**\n"
     )
-    for movie in movie_sales_today:
-        report += f"- {movie[0]}: {movie[1]} ယောက်\n"
+    if movie_sales_today:
+        for movie in movie_sales_today:
+            report += f"- {movie[0]}: {movie[1]} ယောက်\n"
+    else:
+        report += "- မရှိပါ\n"
     
     report += (
         f"\n👥 **Traffic:**\n- ယနေ့ Visitor: {visitors_today}\n- စုစုပေါင်း Visitor: {total_visitors}\n\n"
@@ -333,12 +426,17 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def channel_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post
     if msg and msg.video and msg.caption:
+        # Search for #PriceMMK pattern
         price_match = re.search(r"#(\d+)MMK", msg.caption)
         if price_match:
             price = int(price_match.group(1))
             title = msg.caption.split('\n')[0].strip()
+            # Save file_id from the video
+            file_id = msg.video.file_id
+            
             db_query("INSERT INTO movies (file_id, title, price, added_date) VALUES (?,?,?,?)", 
-                     (msg.video.file_id, title, price, datetime.now().strftime("%Y-%m-%d")))
+                     (file_id, title, price, datetime.now().strftime("%Y-%m-%d")))
+            print(f"Added movie: {title}")
 
 # ==========================================
 # MAIN
@@ -346,31 +444,32 @@ async def channel_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     
-    # Render Fix: Use a more direct application building approach
-    # Avoids internal Updater attribute issues in certain environments
+    # Render Specific: Avoid issues with loop closing
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Manual check: Application needs to handle specific setup
     pay_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_payment, pattern="^(join_vip|pay_single_)")],
         states={UPLOAD_RECEIPT: [MessageHandler(filters.PHOTO, confirm_receipt)]},
-        fallbacks=[CommandHandler("start", start)]
+        fallbacks=[CommandHandler("cancel", cancel_payment)],
+        per_message=False
     )
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("saizawyelwin", admin_stats))
+    
     application.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
     application.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
     application.add_handler(CallbackQueryHandler(view_details, pattern="^view_"))
+    
     application.add_handler(pay_handler)
+    
+    # Channel Listener
     application.add_handler(MessageHandler(filters.ChatType.CHANNEL & filters.VIDEO, channel_listener))
     
-    # Start the bot
-    print("Bot started...")
-    application.run_polling(drop_pending_updates=True, close_loop=False)
+    print("Bot started successfully...")
+    
+    # Removed close_loop=False to avoid conflicts with Python 3.13 and Render environment
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logging.critical(f"Fatal error: {e}")
+    try
