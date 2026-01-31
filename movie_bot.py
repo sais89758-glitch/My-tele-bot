@@ -22,7 +22,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
     filters,
-    ConversationHandler
+    ConversationHandler,
+    Defaults
 )
 from telegram.constants import ParseMode
 
@@ -46,8 +47,11 @@ SETTING_PAY_INFO = 2
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Database Lock for Security/Stability
+db_lock = threading.Lock()
+
 # ==========================================
-# RENDER HEALTH CHECK SERVER (PORT FIX)
+# RENDER HEALTH CHECK SERVER
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -64,38 +68,44 @@ def run_health_check():
 # DATABASE SETUP
 # ==========================================
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, is_vip INTEGER DEFAULT 0, vip_expiry DATE, joined_date DATE)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT, title TEXT, price INTEGER, added_date DATE)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, movie_id INTEGER, PRIMARY KEY (user_id, movie_id))''')
-    c.execute('''CREATE TABLE IF NOT EXISTS payment_settings (pay_type TEXT PRIMARY KEY, phone TEXT, name TEXT, qr_file_id TEXT)''')
-    payments = [('kpay', 'None', 'None', ''), ('wave', 'None', 'None', ''), ('ayapay', 'None', 'None', ''), ('cbpay', 'None', 'None', '')]
-    c.executemany("INSERT OR IGNORE INTO payment_settings VALUES (?,?,?,?)", payments)
-    conn.commit()
-    conn.close()
+    with db_lock:
+        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, is_vip INTEGER DEFAULT 0, vip_expiry DATE, joined_date DATE)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT, title TEXT, price INTEGER, added_date DATE)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, movie_id INTEGER, PRIMARY KEY (user_id, movie_id))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS payment_settings (pay_type TEXT PRIMARY KEY, phone TEXT, name TEXT, qr_file_id TEXT)''')
+        payments = [('kpay', 'None', 'None', ''), ('wave', 'None', 'None', ''), ('ayapay', 'None', 'None', ''), ('cbpay', 'None', 'None', '')]
+        c.executemany("INSERT OR IGNORE INTO payment_settings VALUES (?,?,?,?)", payments)
+        conn.commit()
+        conn.close()
 
 def db_query(query, args=(), fetchone=False, commit=True):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(query, args)
-    if commit: conn.commit()
-    data = c.fetchone() if fetchone else c.fetchall()
-    conn.close()
-    return data
+    with db_lock:
+        try:
+            conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+            c = conn.cursor()
+            c.execute(query, args)
+            if commit: conn.commit()
+            data = c.fetchone() if fetchone else c.fetchall()
+            conn.close()
+            return data
+        except Exception as e:
+            logger.error(f"Database Error: {e}")
+            return None
 
 # ==========================================
-# AI RECEIPT CHECKER (Enhanced)
+# AI RECEIPT CHECKER
 # ==========================================
 async def verify_receipt_with_ai(photo_bytes, expected_amount):
     base64_image = base64.b64encode(photo_bytes).decode('utf-8')
     prompt = (
         f"Analyze this Burmese banking receipt. \n"
-        f"1. Check if the photo is clear, not blurry, and not over-exposed (no glare). \n"
-        f"2. If the photo is not clear enough to read transaction details, return 'blurry'. \n"
+        f"1. Check if the photo is clear, not blurry, and not over-exposed. \n"
+        f"2. If blurry or unreadable, return 'blurry'. \n"
         f"3. If clear, check if valid and extract amount in MMK. \n"
         f"Expected amount: {expected_amount} MMK. \n"
-        f"Return ONLY JSON: {{\"is_valid\": bool, \"is_blurry\": bool, \"amount\": num, \"reason\": \"string\"}}"
+        f"Return ONLY JSON: {{\"is_valid\": bool, \"is_blurry\": bool, \"amount\": num}}"
     )
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/png", "data": base64_image}}]}], "generationConfig": {"responseMimeType": "application/json"}}
@@ -115,11 +125,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "🎬 **Zan Movie Channel Bot**\n\n"
+        "**လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:**\n"
+        "⛔️ ဇာတ်ကားများကို SS ရိုက်ခြင်း၊ Video Record ဖမ်းခြင်း၊ Forward လုပ်ခြင်းများ လုံးဝမရပါ။\n"
+        "✅ တစ်ကားချင်း ဝယ်ယူထားသော ဇာတ်ကားများကို ဤ Channel အတွင်း ရာသက်ပန် ပြန်လည်ကြည့်ရှုနိုင်ပါသည်။\n\n"
         "👑 **VIP အစီအစဉ်များ**\n"
-        f"1️⃣ **Basic VIP** - {PRICE_BASIC} Ks (တစ်လစာ)\n"
-        f"2️⃣ **Pro VIP** - {PRICE_PRO} Ks (ရာသက်ပန်)\n\n"
-        "💡 VIP မဝင်လိုပါက တစ်ကားချင်းလည်း ဝယ်ယူနိုင်ပါသည်။\n"
-        "ဘာမှမဝယ်ထားပါက နမူနာ ၃ မိနစ်သာ ကြည့်ရှုခွင့်ရပါမည်။"
+        f"1️⃣ **Basic VIP ({PRICE_BASIC} Ks) - 1 Month**\n"
+        "   - တစ်လအတွင်း တင်သမျှကို ကြည့်ရှုနိုင်သည်။\n"
+        "   - သက်တမ်းကုန်ပါက အသစ်ရောအဟောင်းပါ ကြည့်မရပါ။\n\n"
+        f"2️⃣ **Pro VIP ({PRICE_PRO} Ks) - Lifetime**\n"
+        "   - တင်သမျှကားအားလုံး ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n\n"
+        "💡 ဘာမှမဝယ်ထားပါက နမူနာ ၃ မိနစ်သာ ကြည့်ရှုခွင့်ရပါမည်။"
     )
     keyboard = [
         [InlineKeyboardButton("👑 Basic VIP (10000 Ks)", callback_data="buy_vip_basic")],
@@ -128,10 +143,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=CHANNEL_URL)]
     ]
     
+    reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
 async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -150,7 +166,8 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         warning_text = (
             f"🎬 **{movie[2]} (Preview)**\n\n"
             "⚠️ ဤဗီဒီယိုသည် ၃ မိနစ်စာ နမူနာသာ ဖြစ်သည်။\n"
-            "အဆုံးထိ ကြည့်ရှုနိုင်ရန် VIP (သို့မဟုတ်) တစ်ကားချင်း ဝယ်ယူပါ။"
+            "• တစ်ကားချင်းဝယ်ယူပါက ရာသက်ပန် ပြန်ကြည့်နိုင်ပါသည်။\n"
+            "• VIP ဝင်ပါက အားလုံးကြည့်နိုင်ပါသည်။"
         )
         kb = [[InlineKeyboardButton(f"💸 ဝယ်မည် ({movie[3]} Ks)", callback_data=f"buy_single_{m_id}")],
               [InlineKeyboardButton("👑 VIP ဝင်မည်", callback_data="buy_vip_basic")],
@@ -184,16 +201,19 @@ async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def auto_delete_pay_info(context: ContextTypes.DEFAULT_TYPE):
+    """၃ မိနစ်ပြည့်ပါက ငွေပေးချေမှု အချက်အလက်များကို ဖျက်ခြင်း"""
     job = context.job
     try:
+        # Delete the payment info message
         await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data['msg_id'])
+        # Send timeout notification
         await context.bot.send_message(
             chat_id=job.chat_id, 
-            text="⏰ **ငွေလွဲချိန် ကုန်ဆုံးသွားပါပြီ။**\nလုံခြုံရေးအရ အချက်အလက်များကို ဖျက်လိုက်ပါသည်။ ငွေလွဲပြီးပါက Menu မှ အချက်အလက်ပြန်တောင်းပြီး ပြေစာ ပို့ပေးပါ။",
+            text="⏰ **ငွေလွဲချိန် ကုန်ဆုံးသွားပါပြီ။**\n\nလုံခြုံရေးအရ အချက်အလက်များကို ဖျက်လိုက်ပါသည်။\nငွေလွဲပြီးပါက Menu မှတဆင့် ငွေပေးချေမှု ခလုတ်ကို ပြန်နှိပ်ပြီး အချက်အလက်ပြန်တောင်းကာ ပြေစာ ပို့ပေးပါ။",
             parse_mode=ParseMode.MARKDOWN
         )
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Auto Delete Error: {e}")
 
 async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -209,7 +229,11 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 ကျသင့်ငွေ: **{expected} MMK**\n"
         f"📞 Phone: `{pay_info[0]}`\n"
         f"👤 Name: **{pay_info[1]}**\n\n"
-        "⚠️ **အရေးကြီးသတိပေးချက်:**\n"
+        "⚠️ **စည်းကမ်းချက်များ (သေချာဖတ်ပါ):**\n"
+        "• ငွေပမာဏကို တစ်ခါတည်း အပြည့်အဝလွဲရပါမည်။\n"
+        "• ခွဲလွဲခြင်း (သို့) ပမာဏမပြည့်ပါက ပြန်အမ်းမည်မဟုတ်သလို ဖွင့်ပေးမည်လည်းမဟုတ်ပါ။\n"
+        "• ပြေစာပုံမဟုတ်ဘဲ တခြားပုံတင်ခြင်း (သို့) ပြေစာအတုတင်ခြင်းများ (Scam) ရှိပါက Bot မှ အမြဲတမ်း Ban ပါမည်။\n\n"
+        "⏳ **အချိန်ကန့်သတ်ချက်:**\n"
         "• ဤအချက်အလက်များသည် **၃ မိနစ်သာ** ပေါ်နေမည်ဖြစ်သည်။\n"
         "• **၃ မိနစ်အတွင်း** ငွေလွဲပြေစာ (SS) ကို ပို့ပေးရပါမည်။\n"
         "• အချိန်မီမပို့နိုင်ပါက ငွေကို အရင်လွဲထားပြီးမှ အချက်အလက်ပြန်တောင်းပြီး ပြေစာပို့ပါ။\n"
@@ -222,6 +246,7 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     
+    # 3-Minute Timer (180 seconds)
     context.job_queue.run_once(auto_delete_pay_info, 180, chat_id=query.from_user.id, data={'msg_id': sent_msg.message_id}, name=str(query.from_user.id))
         
     return UPLOAD_RECEIPT
@@ -232,6 +257,7 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပို့ပေးပါ။")
         return UPLOAD_RECEIPT
 
+    # Remove the Timer since receipt is received
     current_jobs = context.job_queue.get_jobs_by_name(str(user.id))
     for job in current_jobs:
         job.schedule_removal()
@@ -258,10 +284,10 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             m_id = int(buy_type.split("_")[1])
             db_query("INSERT OR IGNORE INTO purchases VALUES (?,?)", (user.id, m_id))
-            msg = f"✅ ဇာတ်ကားဝယ်ယူမှု အောင်မြင်ပါသည်။ အပြည့်အစုံ ကြည့်ရှုနိုင်ပါပြီ။"
+            msg = f"✅ ဇာတ်ကားဝယ်ယူမှု အောင်မြင်ပါသည်။ ဤ Channel တွင် ရာသက်ပန် ကြည့်ရှုနိုင်ပါပြီ။"
         await load.edit_text(msg)
     else:
-        await load.edit_text("❌ ပြေစာမမှန်ကန်ပါ (သို့မဟုတ်) ပမာဏ လိုအပ်နေပါသည်။ ထပ်မံကြိုးစားကြည့်ပါ သို့မဟုတ် Admin ကို ဆက်သွယ်ပါ။")
+        await load.edit_text("❌ ပြေစာမမှန်ကန်ပါ (သို့မဟုတ်) ပမာဏ လိုအပ်နေပါသည်။\n\nScam ဖန်တီးခြင်းဖြစ်ပါက Ban ခံရနိုင်ပါသည်။")
 
     return ConversationHandler.END
 
@@ -299,6 +325,7 @@ async def start_edit_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SETTING_PAY_INFO
 
 async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
     method = context.user_data['edit_method']
     qr_id = update.message.photo[-1].file_id if update.message.photo else ""
     text = update.message.caption if update.message.photo else update.message.text
@@ -315,10 +342,12 @@ async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     
-    # Render Port Fix: Start Health Check Server in a separate thread
+    # Render Port Fix
     threading.Thread(target=run_health_check, daemon=True).start()
     
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Setup Application with Defaults for Security
+    defaults = Defaults(protect_content=True)
+    app = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
 
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_pay_info, pattern="^pay_method_")],
@@ -343,7 +372,7 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_pay_settings, pattern="^adm_pay_set$"))
 
     print("Bot is running...")
-    app.run_polling()
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
