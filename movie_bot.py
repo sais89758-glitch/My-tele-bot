@@ -5,6 +5,8 @@ import requests
 import os
 import base64
 import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -43,6 +45,20 @@ SETTING_PAY_INFO = 2
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ==========================================
+# RENDER HEALTH CHECK SERVER (PORT FIX)
+# ==========================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_health_check():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
 
 # ==========================================
 # DATABASE SETUP
@@ -168,7 +184,6 @@ async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def auto_delete_pay_info(context: ContextTypes.DEFAULT_TYPE):
-    """၃ မိနစ်ပြည့်လျှင် ငွေလွဲအချက်အလက်များကို ဖျက်ပြီး အစသို့ ပြန်ပို့ခြင်း"""
     job = context.job
     try:
         await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data['msg_id'])
@@ -207,7 +222,6 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     
-    # ၃ မိနစ် (၁၈၀ စက္ကန့်) Timer ပေးခြင်း
     context.job_queue.run_once(auto_delete_pay_info, 180, chat_id=query.from_user.id, data={'msg_id': sent_msg.message_id}, name=str(query.from_user.id))
         
     return UPLOAD_RECEIPT
@@ -218,7 +232,6 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပို့ပေးပါ။")
         return UPLOAD_RECEIPT
 
-    # Timer ကို ဖျက်ခြင်း (ပြေစာရောက်လာပြီဖြစ်သောကြောင့်)
     current_jobs = context.job_queue.get_jobs_by_name(str(user.id))
     for job in current_jobs:
         job.schedule_removal()
@@ -253,7 +266,7 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ==========================================
-# MOVIE MENU & ADMIN (Simplified for structure)
+# MOVIE MENU & ADMIN
 # ==========================================
 async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -270,7 +283,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("💳 Payment Settings", callback_data="adm_pay_set")], [InlineKeyboardButton("❌ Close", callback_data="start_back")]]
     await update.message.reply_text("⚙️ **Admin Panel**", reply_markup=InlineKeyboardMarkup(kb))
 
-# (Other admin handlers same as before)
 async def admin_pay_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -302,6 +314,10 @@ async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def main():
     init_db()
+    
+    # Render Port Fix: Start Health Check Server in a separate thread
+    threading.Thread(target=run_health_check, daemon=True).start()
+    
     app = Application.builder().token(BOT_TOKEN).build()
 
     buy_conv = ConversationHandler(
