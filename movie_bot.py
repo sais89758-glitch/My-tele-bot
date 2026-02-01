@@ -28,7 +28,7 @@ from telegram.constants import ParseMode
 # Render သို့မဟုတ် Server တွင် run ပါက Environment Variable ထဲတွင် 'BOT_TOKEN' ကို ထည့်သွင်းပါ။
 # Local တွင် run လိုပါက ဒုတိယ parameter နေရာတွင် Token အသစ်ကို ထည့်သွင်းပါ။
 # ယခင် Token မှာ Invalid ဖြစ်နေသဖြင့် အသစ်ပြန်ထည့်ရန် လိုအပ်ပါသည်။
-BOT_TOKEN: Final = os.getenv("BOT_TOKEN", "REPLACE_WITH_YOUR_NEW_TOKEN_FROM_BOTFATHER")
+BOT_TOKEN: Final = os.getenv("8515688348:AAEFbdCJ6HHR6p4cCgzvUvcRDr7i7u-sL6U")
 
 ADMIN_ID: Final = 6445257462              
 CHANNEL_ID: Final = "@ZanchannelMM" 
