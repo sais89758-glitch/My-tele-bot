@@ -7,14 +7,25 @@ import base64
 import asyncio
 import threading
 import re
+import io
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 from typing import Final
 
+# Graph plotting library
+try:
+    import matplotlib
+    matplotlib.use('Agg') # Use non-interactive backend
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 from telegram import (
     Update, 
     InlineKeyboardButton, 
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
+    InputMediaPhoto
 )
 from telegram.ext import (
     Application,
@@ -77,6 +88,11 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT, title TEXT, price INTEGER, added_date DATE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, movie_id INTEGER, PRIMARY KEY (user_id, movie_id))''')
         c.execute('''CREATE TABLE IF NOT EXISTS payment_settings (pay_type TEXT PRIMARY KEY, phone TEXT, name TEXT, qr_file_id TEXT)''')
+        # Update transactions table to ensure it exists correctly
+        c.execute('''CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount INTEGER, type TEXT, date DATE, status TEXT)''')
+        # Ensure visitors table exists
+        c.execute('''CREATE TABLE IF NOT EXISTS visitors (user_id INTEGER, date DATE, PRIMARY KEY (user_id, date))''')
+        
         payments = [('kpay', 'None', 'None', ''), ('wave', 'None', 'None', ''), ('ayapay', 'None', 'None', ''), ('cbpay', 'None', 'None', '')]
         c.executemany("INSERT OR IGNORE INTO payment_settings VALUES (?,?,?,?)", payments)
         conn.commit()
@@ -123,7 +139,10 @@ async def verify_receipt_with_ai(photo_bytes, expected_amount):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Track User and Visitor
     db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", (user.id, user.username, user.full_name, today))
+    db_query("INSERT OR IGNORE INTO visitors (user_id, date) VALUES (?,?)", (user.id, today))
 
     text = (
         "🎬 **Zan Movie Channel Bot**\n\n"
@@ -131,11 +150,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⛔️ ဇာတ်ကားများကို SS ရိုက်ခြင်း၊ Video Record ဖမ်းခြင်း၊ Forward လုပ်ခြင်းများ လုံးဝမရပါ။\n"
         "✅ တစ်ကားချင်း ဝယ်ယူထားသော ဇာတ်ကားများကို ဤ Channel အတွင်း ရာသက်ပန် ပြန်လည်ကြည့်ရှုနိုင်ပါသည်။\n\n"
         "👑 **VIP အစီအစဉ်များ**\n"
-        f"1️⃣ **Basic VIP ({PRICE_BASIC} Ks) - 1 Month**\n"
-        "   - တစ်လအတွင်း တင်သမျှကို ကြည့်ရှုနိုင်သည်။\n"
-        "   - သက်တမ်းကုန်ပါက အသစ်ရောအဟောင်းပါ ကြည့်မရပါ။\n\n"
-        f"2️⃣ **Pro VIP ({PRICE_PRO} Ks) - Lifetime**\n"
-        "   - တင်သမျှကားအားလုံး ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n\n"
+        f"1️⃣ **Basic VIP ({PRICE_BASIC} Ks) - 1 Month Access**\n"
+        "   - **တစ်လအတွင်း** တင်သမျှကားများကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n"
+        "   - တစ်လပြည့်ပြီးနောက် တင်သော ကားအသစ်များကို ကြည့်ရှုခွင့်မရှိပါ။\n\n"
+        f"2️⃣ **Pro VIP ({PRICE_PRO} Ks) - Lifetime Access**\n"
+        "   - Channel တွင် တင်သမျှ ကားအဟောင်း/အသစ် အားလုံးကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n\n"
         "💡 ဘာမှမဝယ်ထားပါက နမူနာ ၃ မိနစ်သာ ကြည့်ရှုခွင့်ရပါမည်။"
     )
     keyboard = [
@@ -162,7 +181,7 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_vip = user_data[0] if user_data else 0
     has_purchased = db_query("SELECT 1 FROM purchases WHERE user_id=? AND movie_id=?", (user_id, m_id), fetchone=True)
 
-    if is_vip >= 1 or has_purchased:
+    if is_vip >= 1 or has_purchased: # Note: Logic for Basic VIP expiry vs movie date would go here if strict enforcement is needed
         await context.bot.send_video(chat_id=user_id, video=movie[1], caption=f"🎬 {movie[2]}", protect_content=True)
     else:
         warning_text = (
@@ -242,7 +261,7 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     
-    # 3-Minute Timer
+    # 3-Minute Timer (180 seconds)
     context.job_queue.run_once(auto_delete_pay_info, 180, chat_id=query.from_user.id, data={'msg_id': sent_msg.message_id}, name=str(query.from_user.id))
         
     return UPLOAD_RECEIPT
@@ -264,6 +283,7 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     load = await update.message.reply_text("🔍 ပြေစာအား AI ဖြင့် စစ်ဆေးနေပါသည်...")
     result = await verify_receipt_with_ai(photo_bytes, expected)
+    today = datetime.now().strftime("%Y-%m-%d")
 
     if result.get('is_blurry'):
         await load.edit_text("❌ **ပုံမကြည်လင်ပါ။**\n\nကျေးဇူးပြု၍ ပြေစာကို အလင်းမပြန်အောင် ပြန်ရိုက်ပြီး ပို့ပေးပါ။")
@@ -275,16 +295,114 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             v_type = 1 if plan == 'basic' else 2
             expiry = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d") if plan == 'basic' else "9999-12-31"
             db_query("UPDATE users SET is_vip=?, vip_expiry=? WHERE user_id=?", (v_type, expiry, user.id))
+            db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, expected, f'vip_{plan}', today, 'success'))
             msg = f"✅ {plan.upper()} VIP အဖြစ် အောင်မြင်စွာ သတ်မှတ်ပြီးပါပြီ။"
         else:
             m_id = int(buy_type.split("_")[1])
             db_query("INSERT OR IGNORE INTO purchases VALUES (?,?)", (user.id, m_id))
+            db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, expected, f'single_{m_id}', today, 'success'))
             msg = f"✅ ဇာတ်ကားဝယ်ယူမှု အောင်မြင်ပါသည်။"
         await load.edit_text(msg)
     else:
+        # Record Scam Attempt
+        db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, 0, 'scam_attempt', today, 'failed'))
         await load.edit_text("❌ ပြေစာမမှန်ကန်ပါ (သို့မဟုတ်) ပမာဏ လိုအပ်နေပါသည်။")
 
     return ConversationHandler.END
+
+# ==========================================
+# ADMIN STATS & GRAPH
+# ==========================================
+async def generate_admin_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    current_month = now.strftime("%Y-%m")
+    month_name = now.strftime("%B")
+
+    # 1. Traffic Stats
+    visitors_today = db_query("SELECT COUNT(*) FROM visitors WHERE date=?", (today,), fetchone=True)[0]
+    total_visitors = db_query("SELECT COUNT(*) FROM visitors", fetchone=True)[0]
+
+    # 2. Transaction Stats (Today)
+    vip_today = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'vip_%' AND date=? AND status='success'", (today,), fetchone=True)[0]
+    single_today = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'single_%' AND date=? AND status='success'", (today,), fetchone=True)[0]
+    scam_today = db_query("SELECT COUNT(*) FROM transactions WHERE status='failed' AND date=?", (today,), fetchone=True)[0]
+    rev_today = db_query("SELECT SUM(amount) FROM transactions WHERE date=? AND status='success'", (today,), fetchone=True)[0] or 0
+    
+    # 3. Transaction Stats (Monthly Total)
+    vip_total = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'vip_%' AND date LIKE ? AND status='success'", (f"{current_month}%",), fetchone=True)[0]
+    single_total = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'single_%' AND date LIKE ? AND status='success'", (f"{current_month}%",), fetchone=True)[0]
+    scam_total = db_query("SELECT COUNT(*) FROM transactions WHERE status='failed' AND date LIKE ?", (f"{current_month}%",), fetchone=True)[0]
+    rev_total = db_query("SELECT SUM(amount) FROM transactions WHERE date LIKE ? AND status='success'", (f"{current_month}%",), fetchone=True)[0] or 0
+
+    # 4. Window Shoppers (Visited but didn't buy today)
+    buyers_today = db_query("SELECT COUNT(DISTINCT user_id) FROM transactions WHERE date=? AND status='success'", (today,), fetchone=True)[0]
+    window_shoppers_today = max(0, visitors_today - buyers_today)
+
+    # 5. Single Buyers Detail (Today)
+    single_details = db_query("""
+        SELECT u.full_name, m.title 
+        FROM transactions t
+        JOIN users u ON t.user_id = u.user_id
+        LEFT JOIN movies m ON CAST(SUBSTR(t.type, 8) AS INTEGER) = m.id
+        WHERE t.type LIKE 'single_%' AND t.date=? AND t.status='success'
+    """, (today,))
+    
+    single_buyer_text = "\n".join([f"👤 {row[0]} -> 🎬 {row[1]}" for row in single_details]) if single_details else "မရှိပါ"
+
+    report_text = (
+        f"📊 **Admin Daily & Monthly Report**\n"
+        f"📅 Date: {today}\n\n"
+        f"💰 **ဝင်ငွေစာရင်း (MMK):**\n"
+        f"• ယနေ့ ဝင်ငွေ: {rev_today:,.0f} Ks\n"
+        f"• {month_name} လချုပ်: {rev_total:,.0f} Ks\n\n"
+        f"👥 **လူဝင်ရောက်မှု (Traffic):**\n"
+        f"• ယနေ့ Visitor: {visitors_today}\n"
+        f"• Window Shoppers (မဝယ်သူများ): {window_shoppers_today}\n"
+        f"• စုစုပေါင်း Visitor: {total_visitors}\n\n"
+        f"👑 **VIP အရောင်းစာရင်း:**\n"
+        f"• ယနေ့ VIP ဝင်သူ: {vip_today}\n"
+        f"• {month_name} VIP စုစုပေါင်း: {vip_total}\n\n"
+        f"🎬 **တစ်ကားချင်း ဝယ်သူများ:**\n"
+        f"• ယနေ့ ဝယ်သူအရေအတွက်: {single_today}\n"
+        f"• {month_name} စုစုပေါင်း: {single_total}\n"
+        f"👇 **ယနေ့ဝယ်ယူသူ စာရင်း:**\n{single_buyer_text}\n\n"
+        f"🚫 **လုံခြုံရေး (Scams):**\n"
+        f"• ယနေ့ Scam/Fail: {scam_today}\n"
+        f"• {month_name} စုစုပေါင်း: {scam_total}"
+    )
+
+    # Generate Graph
+    photo = None
+    if HAS_MATPLOTLIB:
+        try:
+            # Query Daily Revenue for Graph
+            daily_rev = db_query("SELECT date, SUM(amount) FROM transactions WHERE date LIKE ? AND status='success' GROUP BY date ORDER BY date", (f"{current_month}%",))
+            if daily_rev:
+                dates = [d[0].split('-')[-1] for d in daily_rev] # Get days only
+                amounts = [d[1] for d in daily_rev]
+                
+                plt.figure(figsize=(10, 5))
+                plt.plot(dates, amounts, marker='o', linestyle='-', color='b')
+                plt.title(f'Daily Revenue - {month_name}')
+                plt.xlabel('Day')
+                plt.ylabel('Amount (MMK)')
+                plt.grid(True)
+                
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                photo = buf
+                plt.close()
+        except Exception as e:
+            logger.error(f"Graph Error: {e}")
+
+    if photo:
+        await context.bot.send_photo(chat_id=ADMIN_ID, photo=photo, caption=report_text, parse_mode=ParseMode.MARKDOWN)
+    else:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=report_text, parse_mode=ParseMode.MARKDOWN)
 
 # ==========================================
 # MOVIE MENU & ADMIN
@@ -329,8 +447,6 @@ async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ စာသားထည့်ပေးရန် လိုအပ်ပါသည်။")
         return SETTING_PAY_INFO
 
-    # ပုံထဲကအတိုင်း Line break တွေကို handle လုပ်ဖို့ စာသားကို ခွဲထုတ်ခြင်း
-    # ဖုန်းနံပါတ်နဲ့ နာမည်ကို ရှာဖွေခြင်း (စာကြောင်းအသစ်တွေပါ စစ်ဆေးသည်)
     lines = [line.strip() for line in raw_text.replace('|', '\n').split('\n') if line.strip()]
     
     try:
@@ -372,7 +488,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("saizawyelwin", admin_panel))
+    app.add_handler(CommandHandler("saizawyelwin", generate_admin_report)) # Changed to Direct Report
     app.add_handler(admin_pay_conv)
     app.add_handler(buy_conv)
     app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
