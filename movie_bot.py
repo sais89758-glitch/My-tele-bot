@@ -40,10 +40,6 @@ ADMIN_ID: Final = 6445257462
 CHANNEL_ID: Final = "@ZanchannelMM"       
 DB_NAME: Final = "movie_database_pro.db"
 
-# Pricing
-PRICE_BASIC_VIP: Final = 10000
-PRICE_PRO_VIP: Final = 30000
-
 # States for Conversation
 ADD_MOVIE_STATE = 1
 WAIT_RECEIPT = 2
@@ -53,7 +49,7 @@ logger = logging.getLogger(__name__)
 db_lock = threading.Lock()
 
 # ==========================================
-# RENDER WEB SERVER (FIXED PORT BINDING)
+# RENDER WEB SERVER
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -273,19 +269,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+    # အစ်ကိုပေးထားတဲ့ Screenshot ထဲကအတိုင်း စာသားများကို ပြန်လည်ပြင်ဆင်ခြင်း
     text = (
-        "👋 မင်္ဂလာပါ **Zan Movie Bot** မှ ကြိုဆိုပါသည်။\n\n"
-        "👑 **VIP Plan များ**\n"
-        "1️⃣ Basic VIP (1 Month) - 10,000 Ks\n"
-        "2️⃣ Pro VIP (Lifetime) - 30,000 Ks\n\n"
-        "🎬 တစ်ကားချင်းလည်း ဝယ်ယူကြည့်ရှုနိုင်ပါသည်။"
+        "🎬 **Zan Movie Channel Bot**\n\n"
+        "လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:\n"
+        "⛔️ ဇာတ်ကားများကို SS ရိုက်ခြင်း၊ Video Record ဖမ်းခြင်း၊ ဖုန်းထဲသို့ Save လုပ်ခြင်း နှင့် Forward လုပ်ခြင်းများ လုံးဝမရပါ။\n"
+        "✅ တစ်ကားချင်း ဝယ်ယူထားသော ဇာတ်ကားများကို ဤ Channel အတွင်း ရာသက်ပန် ပြန်ကြည့်နိုင်ပါသည်။\n\n"
+        "👑 **VIP အစီအစဉ်များ**\n"
+        "1️⃣ Basic VIP (10000 Ks) - 1 Month Access\n"
+        "   - တစ်လအတွင်း တင်သမျှကားများကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n"
+        "2️⃣ Pro VIP (30000 Ks) - Lifetime Access\n"
+        "   - Channel တွင် တင်သမျှ ကားဟောင်း/ကားသစ် အားလုံးကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n\n"
+        "💡 ဘာမှမဝယ်ထားပါက နမူနာ ၃ မိနစ်သာ ကြည့်ရှုခွင့်ရပါမည်။"
     )
+    
     kb = [
-        [InlineKeyboardButton("👑 Buy Basic VIP", callback_data="pay_select_BasicVIP_10000")],
-        [InlineKeyboardButton("👑 Buy Pro VIP", callback_data="pay_select_ProVIP_30000")],
-        [InlineKeyboardButton("🆘 Admin ဆက်သွယ်ရန်", url="https://t.me/Saizawyelwin")]
+        [InlineKeyboardButton("👑 Basic VIP (10000 Ks)", callback_data="pay_select_BasicVIP_10000")],
+        [InlineKeyboardButton("👑 Pro VIP (30000 Ks)", callback_data="pay_select_ProVIP_30000")],
+        [InlineKeyboardButton("🎬 ဇာတ်ကားစီနီယာ", callback_data="movie_list")],
+        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url="https://t.me/ZanchannelMM")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_start")]
     ]
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def show_payment_options(update: Update, item_name, amount):
     user_id = update.effective_user.id
@@ -326,8 +335,8 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_info = {
         "KBZ": "09960202983 (Sai Zaw Ye Lwin)",
         "Wave": "09960202983 (Sai Zaw Ye Lwin)",
-        "AYA": "09XXXXX (Name)",
-        "CB": "00XXXXX (Name)"
+        "AYA": "09960202983 (Sai Zaw Ye Lwin)",
+        "CB": "09960202983 (Sai Zaw Ye Lwin)"
     }
     
     text = (
@@ -410,7 +419,6 @@ def main():
     init_db()
     
     # Render Port Binding
-    port = int(os.environ.get("PORT", 8080))
     threading.Thread(target=run_health_check_server, daemon=True).start()
     
     try:
@@ -440,6 +448,7 @@ def main():
     app.add_handler(upload_conv)
     app.add_handler(pay_conv)
     app.add_handler(CallbackQueryHandler(payment_handler, pattern="^pay_select_"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^refresh_start$"))
     app.add_handler(CommandHandler("start", start))
     
     logger.info("🤖 Bot is starting polling...")
