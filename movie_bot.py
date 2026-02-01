@@ -117,19 +117,15 @@ def init_db():
 # GEMINI AI RECEIPT SCANNER
 # ==========================================
 async def verify_receipt_with_ai(photo_bytes, expected_amount):
-    """
-    Gemini 2.5 Flash ကိုသုံးပြီး ပြေစာ အတု/အစစ် နှင့် Note ပါမပါ စစ်ဆေးခြင်း
-    """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={GEMINI_API_KEY}"
-    
     image_base64 = base64.b64encode(photo_bytes).decode('utf-8')
     
     prompt = (
-        f"Analyze this payment receipt. "
+        f"Analyze this payment receipt from Myanmar (KBZPay, WavePay, etc.). "
         f"1. Check if the amount is at least {expected_amount} MMK. "
-        f"2. IMPORTANT: Check the 'Note' or 'Message' field. If it contains words like 'Channel', 'Movie', 'ဇာတ်ကား', 'ဝယ်ရန်', 'ဝင်ရန်', 'ကြည့်ရန်', "
+        f"2. IMPORTANT: Check the 'Note' or 'Message' or 'Remark' field. If it contains words like 'Channel', 'Movie', 'ဇာတ်ကား', 'ဝယ်ရန်', 'ဝင်ရန်', 'ကြည့်ရန်', 'VIP', "
         f"mark 'has_forbidden_note' as true. "
-        f"3. Detect visual editing/fakes. "
+        f"3. Detect visual editing, fake fonts, or if it is an old receipt. "
         f"Return JSON: {{'is_valid': bool, 'amount_detected': int, 'has_forbidden_note': bool, 'is_scam': bool, 'reason': string}}"
     )
 
@@ -157,15 +153,31 @@ async def verify_receipt_with_ai(photo_bytes, expected_amount):
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # Check if banned
     user_data = db_query("SELECT is_banned FROM users WHERE user_id=?", (user.id,), fetchone=True)
     if user_data and user_data[0] == 1:
-        await update.message.reply_text("⛔️ သင်သည် စည်းကမ်းချက်များကို ချိုးဖောက်သဖြင့် အသုံးပြုခွင့် ပိတ်ပင်ခံထားရပါသည်။")
+        msg_text = "⛔️ သင်သည် စည်းကမ်းချက်များကို ချိုးဖောက်သဖြင့် အသုံးပြုခွင့် ပိတ်ပင်ခံထားရပါသည်။"
+        if update.callback_query:
+            await update.callback_query.answer(msg_text, show_alert=True)
+        else:
+            await update.message.reply_text(msg_text)
         return
 
     db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", 
              (user.id, user.username, user.full_name, datetime.now()))
 
-    # Welcome message and buttons logic...
+    # Start buying process if link used
+    args = context.args
+    if args and args[0].startswith("buy_"):
+        try:
+            movie_id = int(args[0].split("_")[1])
+            movie = db_query("SELECT title, price FROM movies WHERE id=?", (movie_id,), fetchone=True)
+            if movie:
+                await show_payment_options(update, movie[0], movie[1])
+                return
+        except: pass
+
     text = (
         "🎬 **Zan Movie Channel Bot**\n\n"
         "လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:\n"
@@ -173,21 +185,63 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ တစ်ကားချင်း ဝယ်ယူထားသော ဇာတ်ကားများကို ဤ Channel အတွင်း ရာသက်ပန် ပြန်ကြည့်နိုင်ပါသည်။\n\n"
         "👑 **VIP အစီအစဉ်များ**\n"
         "1️⃣ Basic VIP (10000 Ks) - 1 Month Access\n"
+        "   - တစ်လအတွင်း တင်သမျှကားများကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n"
         "2️⃣ Pro VIP (30000 Ks) - Lifetime Access\n"
+        "   - Channel တွင် တင်သမျှ ကားဟောင်း/ကားသစ် အားလုံးကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n\n"
+        "💡 ဘာမှမဝယ်ထားပါက နမူနာ ၃ မိနစ်သာ ကြည့်ရှုခွင့်ရပါမည်။"
     )
     
-    kb = [[InlineKeyboardButton("👑 Basic VIP (10000 Ks)", callback_data="pay_select_BasicVIP_10000")],
-          [InlineKeyboardButton("👑 Pro VIP (30000 Ks)", callback_data="pay_select_ProVIP_30000")],
-          [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_start")]]
+    kb = [
+        [InlineKeyboardButton("👑 Basic VIP (10000 Ks)", callback_data="pay_select_BasicVIP_10000")],
+        [InlineKeyboardButton("👑 Pro VIP (30000 Ks)", callback_data="pay_select_ProVIP_30000")],
+        [InlineKeyboardButton("🎬 ဇာတ်ကားမိန်း", callback_data="movie_list")],
+        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url="https://t.me/ZanchannelMM")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_start")]
+    ]
     
+    markup = InlineKeyboardMarkup(kb)
     if update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+
+async def show_payment_options(update: Update, item_name, amount):
+    user_id = update.effective_user.id
+    db_query("INSERT INTO transactions (user_id, item_name, amount, date) VALUES (?,?,?,?)", 
+             (user_id, item_name, amount, datetime.now()))
+    tx_id = db_query("SELECT last_insert_rowid()", fetchone=True)[0]
+    
+    text = f"💳 **ငွေပေးချေရန် ရွေးချယ်ပါ**\n\n📝 ဝယ်ယူမည့်အရာ: **{item_name}**\n💰 ကျသင့်ငွေ: **{amount} MMK**"
+    kb = [
+        [InlineKeyboardButton("KBZPay", callback_data=f"pay_method_KBZ_{tx_id}"), 
+         InlineKeyboardButton("WavePay", callback_data=f"pay_method_Wave_{tx_id}")],
+        [InlineKeyboardButton("AYA Pay", callback_data=f"pay_method_AYA_{tx_id}"), 
+         InlineKeyboardButton("CB Pay", callback_data=f"pay_method_CB_{tx_id}")],
+        [InlineKeyboardButton("❌ မဝယ်တော့ပါ", callback_data="refresh_start")]
+    ]
+    
+    markup = InlineKeyboardMarkup(kb)
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
 
 async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    _, method, tx_id = query.data.split("_")
+    await query.answer()
+    
+    data_parts = query.data.split("_")
+    # Expected format: pay_method_KBZ_123 or pay_select_BasicVIP_10000
+    
+    if data_parts[1] == "select":
+        item_name = data_parts[2]
+        amount = int(data_parts[3])
+        await show_payment_options(update, item_name, amount)
+        return
+    
+    # Process payment method selection
+    method = data_parts[2]
+    tx_id = data_parts[3]
     
     tx = db_query("SELECT item_name, amount FROM transactions WHERE id=?", (tx_id,), fetchone=True)
     if not tx: return
@@ -213,7 +267,7 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("❌ ပြေစာဓာတ်ပုံ ပို့ပေးပါ။")
+        await update.message.reply_text("❌ ပြေစာဓာတ်ပုံ (Screenshot) ပို့ပေးပါ။")
         return WAIT_RECEIPT
     
     msg = await update.message.reply_text("⏳ AI က ပြေစာနှင့် Note များကို စစ်ဆေးနေပါသည်...")
@@ -229,29 +283,101 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ai_result = await verify_receipt_with_ai(bytes(photo_bytes), expected_amount)
     
     if ai_result:
-        # Note ပါသွားရင် Reject လုပ်မယ့်အပိုင်း
+        # Check forbidden note
         if ai_result.get('has_forbidden_note'):
             db_query("UPDATE transactions SET status='REJECTED_NOTE' WHERE id=?", (tx_id,))
             await msg.edit_text(
                 "❌ **ဝယ်ယူမှု မအောင်မြင်ပါ။**\n\n"
-                "အကြောင်းပြချက်: ငွေလွှဲပြေစာ၏ Note (မှတ်ချက်) တွင် တားမြစ်ထားသော စာသားများ ပါဝင်နေပါသည်။\n"
+                "အကြောင်းပြချက်: ငွေလွှဲပြေစာ၏ Note (မှတ်ချက်) တွင် တားမြစ်ထားသော စာသားများ (ဇာတ်ကား/Channel) ပါဝင်နေပါသည်။\n"
                 "စည်းကမ်းချက်အတိုင်း ငွေပြန်အမ်းပေးမည်မဟုတ်သလို ဇာတ်ကားလည်း ကြည့်ရှုခွင့်ရမည်မဟုတ်ပါ။"
             )
             return ConversationHandler.END
 
+        # Check scam
         if ai_result.get('is_scam'):
             db_query("UPDATE users SET is_banned=1 WHERE user_id=?", (user.id,))
-            await msg.edit_text("⛔️ ပြေစာအတုဖြစ်သဖြင့် သင့်အား Ban လုပ်လိုက်ပါသည်။")
+            db_query("UPDATE transactions SET status='SCAM' WHERE id=?", (tx_id,))
+            await msg.edit_text("⛔️ သင်၏ပြေစာမှာ အတုဖြစ်ကြောင်း AI က စစ်ဆေးတွေ့ရှိရပါသည်။ ထို့ကြောင့် သင့်ကို Ban လုပ်လိုက်ပါသည်။")
             return ConversationHandler.END
         
+        # Check valid and amount
         if ai_result.get('is_valid') and ai_result.get('amount_detected') >= expected_amount:
             db_query("UPDATE transactions SET status='SUCCESS' WHERE id=?", (tx_id,))
-            # Handle VIP or Movie access logic here...
-            await msg.edit_text(f"🎉 **{item_name}** ဝယ်ယူမှု အောင်မြင်ပါသည်။")
+            if "BasicVIP" in item_name:
+                expiry = datetime.now() + timedelta(days=30)
+                db_query("UPDATE users SET vip_type='BasicVIP', vip_expiry=? WHERE user_id=?", (expiry, user.id))
+                await msg.edit_text(f"🎉 **{item_name}** ဝယ်ယူမှု အောင်မြင်ပါသည်။ ၁ လစာ အသုံးပြုနိုင်ပါပြီ။")
+            elif "ProVIP" in item_name:
+                db_query("UPDATE users SET vip_type='ProVIP' WHERE user_id=?", (user.id,))
+                await msg.edit_text(f"🎉 **{item_name}** ဝယ်ယူမှု အောင်မြင်ပါသည်။ ရာသက်ပန် အသုံးပြုနိုင်ပါပြီ။")
+            else:
+                movie = db_query("SELECT file_id, title FROM movies WHERE title=?", (item_name,), fetchone=True)
+                if movie:
+                    await context.bot.send_video(user.id, video=movie[0], caption=f"🎬 **{movie[1]}**\nဝယ်ယူမှုအတွက် ကျေးဇူးတင်ပါသည်။")
+                    await msg.delete()
             return ConversationHandler.END
 
-    await msg.edit_text("✅ ပြေစာရပါပြီ။ Admin က Note ပါမပါ စစ်ဆေးပြီး အတည်ပြုပေးပါမည်။")
-    # Send to admin for manual review if AI is unsure
+    # Manual Review if AI fails or unsure
+    await msg.edit_text("✅ ပြေစာရပါပြီ။ Admin က စစ်ဆေးပြီး အတည်ပြုပေးပါမည်။")
+    caption = f"📩 **Review Needed**\n👤 {user.full_name}\n💰 {expected_amount}\n🆔 TxID: {tx_id}"
+    kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"adm_app_{tx_id}_{user.id}"), 
+           InlineKeyboardButton("❌ Scam & Ban", callback_data=f"adm_scm_{tx_id}_{user.id}")]]
+    await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, caption=caption, reply_markup=InlineKeyboardMarkup(kb))
     return ConversationHandler.END
 
-# ... rest of the code (admin_decision, main, etc.)
+# ==========================================
+# ADMIN ACTIONS
+# ==========================================
+async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    action, _, tx_id, user_id = query.data.split("_")
+    
+    if action == "adm_app":
+        tx = db_query("SELECT item_name FROM transactions WHERE id=?", (tx_id,), fetchone=True)
+        if tx:
+            item = tx[0]
+            db_query("UPDATE transactions SET status='SUCCESS' WHERE id=?", (tx_id,))
+            if "BasicVIP" in item:
+                expiry = datetime.now() + timedelta(days=30)
+                db_query("UPDATE users SET vip_type='BasicVIP', vip_expiry=? WHERE user_id=?", (expiry, user_id))
+            elif "ProVIP" in item:
+                db_query("UPDATE users SET vip_type='ProVIP' WHERE user_id=?", (user_id,))
+            await context.bot.send_message(user_id, f"🎉 **{item}** ဝယ်ယူမှု အောင်မြင်ပါသည်။")
+        await query.message.edit_caption(caption=query.message.caption + "\n\n✅ APPROVED")
+    
+    elif action == "adm_scm":
+        db_query("UPDATE users SET is_banned=1 WHERE user_id=?", (user_id,))
+        db_query("UPDATE transactions SET status='SCAM' WHERE id=?", (tx_id,))
+        await context.bot.send_message(user_id, "❌ သင်၏ပြေစာ မမှန်ကန်သဖြင့် Ban လုပ်လိုက်ပါသည်။")
+        await query.message.edit_caption(caption=query.message.caption + "\n\n⛔️ BANNED")
+
+# ==========================================
+# MAIN
+# ==========================================
+def main():
+    init_db()
+    threading.Thread(target=run_health_check_server, daemon=True).start()
+    
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # VIP & Payment Selection Handler
+    app.add_handler(CallbackQueryHandler(payment_handler, pattern="^pay_select_"))
+    
+    # Payment Method & Receipt Conversation
+    pay_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(payment_handler, pattern="^pay_method_")],
+        states={WAIT_RECEIPT: [MessageHandler(filters.PHOTO, handle_receipt)]},
+        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(start, pattern="^refresh_start$")]
+    )
+
+    app.add_handler(pay_conv)
+    app.add_handler(CallbackQueryHandler(admin_decision, pattern="^adm_"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^refresh_start$"))
+    app.add_handler(CommandHandler("start", start))
+    
+    logger.info("🤖 Bot is running...")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
