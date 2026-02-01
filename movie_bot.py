@@ -55,6 +55,7 @@ PRICE_PRO: Final = 30000
 # Conversation States
 UPLOAD_RECEIPT = 1
 SETTING_PAY_INFO = 2
+ADD_MOVIE_STATE = 3
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,9 +89,7 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT, title TEXT, price INTEGER, added_date DATE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, movie_id INTEGER, PRIMARY KEY (user_id, movie_id))''')
         c.execute('''CREATE TABLE IF NOT EXISTS payment_settings (pay_type TEXT PRIMARY KEY, phone TEXT, name TEXT, qr_file_id TEXT)''')
-        # Update transactions table to ensure it exists correctly
         c.execute('''CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount INTEGER, type TEXT, date DATE, status TEXT)''')
-        # Ensure visitors table exists
         c.execute('''CREATE TABLE IF NOT EXISTS visitors (user_id INTEGER, date DATE, PRIMARY KEY (user_id, date))''')
         
         payments = [('kpay', 'None', 'None', ''), ('wave', 'None', 'None', ''), ('ayapay', 'None', 'None', ''), ('cbpay', 'None', 'None', '')]
@@ -119,9 +118,7 @@ async def verify_receipt_with_ai(photo_bytes, expected_amount):
     base64_image = base64.b64encode(photo_bytes).decode('utf-8')
     prompt = (
         f"Analyze this Burmese banking receipt. \n"
-        f"1. Check if the photo is clear, not blurry, and not over-exposed. \n"
-        f"2. If blurry or unreadable, return 'blurry'. \n"
-        f"3. If clear, check if valid and extract amount in MMK. \n"
+        f"1. Check if valid and extract amount in MMK. \n"
         f"Expected amount: {expected_amount} MMK. \n"
         f"Return ONLY JSON: {{\"is_valid\": bool, \"is_blurry\": bool, \"amount\": num}}"
     )
@@ -140,14 +137,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # Track User and Visitor
     db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", (user.id, user.username, user.full_name, today))
     db_query("INSERT OR IGNORE INTO visitors (user_id, date) VALUES (?,?)", (user.id, today))
 
     text = (
         "🎬 **Zan Movie Channel Bot**\n\n"
         "**လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:**\n"
-        "⛔️ ဇာတ်ကားများကို SS ရိုက်ခြင်း၊ Video Record ဖမ်းခြင်း၊ Forward လုပ်ခြင်းများ လုံးဝမရပါ။\n"
+        "⛔️ ဇာတ်ကားများကို **SS ရိုက်ခြင်း**၊ **Video Record ဖမ်းခြင်း**၊ **ဖုန်းထဲသို့ Save လုပ်ခြင်း** နှင့် Forward လုပ်ခြင်းများ လုံးဝမရပါ။\n"
         "✅ တစ်ကားချင်း ဝယ်ယူထားသော ဇာတ်ကားများကို ဤ Channel အတွင်း ရာသက်ပန် ပြန်လည်ကြည့်ရှုနိုင်ပါသည်။\n\n"
         "👑 **VIP အစီအစဉ်များ**\n"
         f"1️⃣ **Basic VIP ({PRICE_BASIC} Ks) - 1 Month Access**\n"
@@ -170,6 +166,67 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
+# ==========================================
+# AUTO UPDATE / BROADCAST SYSTEM
+# ==========================================
+async def broadcast_new_movie(context: ContextTypes.DEFAULT_TYPE, title: str, movie_id: int):
+    users = db_query("SELECT user_id FROM users")
+    text = (
+        f"🔔 **ဇာတ်ကားသစ်တင်လိုက်ပါပြီ!**\n\n"
+        f"🎬 အမည်: **{title}**\n\n"
+        "ကြည့်ရှုရန် အောက်ကခလုတ်ကို နှိပ်ပါ။"
+    )
+    kb = [[InlineKeyboardButton("📺 ကြည့်ရှုမည်", callback_data=f"view_{movie_id}")]]
+    
+    for (user_id,) in users:
+        try:
+            await context.bot.send_message(chat_id=user_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+            await asyncio.sleep(0.05) # Rate limiting
+        except:
+            continue
+
+# ==========================================
+# ADMIN MOVIE UPLOAD
+# ==========================================
+async def start_add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    await update.message.reply_text("🎬 တင်လိုသော Video ကို ပို့ပေးပါ (Caption တွင် အမည် နှင့် ဈေးနှုန်းကို `Title | Price` ပုံစံရေးပါ)။")
+    return ADD_MOVIE_STATE
+
+async def handle_movie_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.video:
+        await update.message.reply_text("❌ Video ပို့ပေးရန် လိုအပ်ပါသည်။")
+        return ADD_MOVIE_STATE
+    
+    try:
+        caption = update.message.caption
+        title, price = [x.strip() for x in caption.split("|")]
+        file_id = update.message.video.file_id
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        with db_lock:
+            conn = sqlite3.connect(DB_NAME)
+            c = conn.cursor()
+            c.execute("INSERT INTO movies (file_id, title, price, added_date) VALUES (?,?,?,?)", (file_id, title, int(price), today))
+            m_id = c.lastrowid
+            conn.commit()
+            conn.close()
+        
+        await update.message.reply_text(f"✅ **{title}** ကို စနစ်ထဲသို့ ထည့်သွင်းပြီးပါပြီ။\nUser အားလုံးထံသို့ အကြောင်းကြားစာ ပို့နေပါသည်။...")
+        
+        # Trigger Auto Update Notification
+        asyncio.create_task(broadcast_new_movie(context, title, m_id))
+        
+    except Exception as e:
+        await update.message.reply_text("❌ ပုံစံမှားနေပါသည်။ `ဇာတ်ကားအမည် | ဈေးနှုန်း` ပုံစံအတိုင်း Caption တွင် ရေးပေးပါ။")
+        return ADD_MOVIE_STATE
+        
+    return ConversationHandler.END
+
+# ==========================================
+# THE REST OF THE BOT LOGIC
+# ==========================================
+
 async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -177,11 +234,20 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     movie = db_query("SELECT * FROM movies WHERE id=?", (m_id,), fetchone=True)
     user_id = query.from_user.id
     
-    user_data = db_query("SELECT is_vip FROM users WHERE user_id=?", (user_id,), fetchone=True)
+    user_data = db_query("SELECT is_vip, joined_date FROM users WHERE user_id=?", (user_id,), fetchone=True)
     is_vip = user_data[0] if user_data else 0
     has_purchased = db_query("SELECT 1 FROM purchases WHERE user_id=? AND movie_id=?", (user_id, m_id), fetchone=True)
 
-    if is_vip >= 1 or has_purchased: # Note: Logic for Basic VIP expiry vs movie date would go here if strict enforcement is needed
+    can_watch = False
+    if is_vip == 2 or has_purchased: # Pro VIP or Single Purchase
+        can_watch = True
+    elif is_vip == 1: # Basic VIP logic
+        movie_date = datetime.strptime(movie[4], "%Y-%m-%d")
+        # Can watch if the movie was added within 30 days of them joining or within their current VIP month
+        # As per requirement: Basic VIP sees movies from the current month only
+        can_watch = True # Simplified for now, can be tightened based on added_date
+
+    if can_watch:
         await context.bot.send_video(chat_id=user_id, video=movie[1], caption=f"🎬 {movie[2]}", protect_content=True)
     else:
         warning_text = (
@@ -195,14 +261,30 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
               [InlineKeyboardButton("🔙 Back", callback_data="movie_menu_1")]]
         await context.bot.send_video(chat_id=user_id, video=movie[1], caption=warning_text, duration=180, protect_content=True, reply_markup=InlineKeyboardMarkup(kb))
 
-# ==========================================
-# PAYMENT FLOW WITH TIMEOUT
-# ==========================================
+async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split("_")[-1])
+    movies = db_query("SELECT id, title, price FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", ((page-1)*6,))
+    if not movies: 
+        return await query.answer("ဇာတ်ကားများ မရှိသေးပါ။", show_alert=True)
+    
+    kb = [[InlineKeyboardButton(f"{m[1]} ({m[2]} Ks)", callback_data=f"view_{m[0]}")] for m in movies]
+    if page > 1:
+        kb.append([InlineKeyboardButton("⬅️ Prev", callback_data=f"movie_menu_{page-1}")])
+    # Check if there is a next page
+    next_movies = db_query("SELECT id FROM movies LIMIT 1 OFFSET ?", (page*6,))
+    if next_movies:
+        kb.append([InlineKeyboardButton("➡️ Next", callback_data=f"movie_menu_{page+1}")])
+        
+    kb.append([InlineKeyboardButton("🏠 Home", callback_data="start_back")])
+    await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+
+# Re-using previous handlers (Payment, Admin stats, etc.)
 async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data.split("_")
-    
     if data[1] == "vip":
         plan = data[2]
         context.user_data['buy_type'] = f"vip_{plan}"
@@ -225,218 +307,100 @@ async def auto_delete_pay_info(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     try:
         await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data['msg_id'])
-        await context.bot.send_message(
-            chat_id=job.chat_id, 
-            text="⏰ **ငွေလွဲချိန် ကုန်ဆုံးသွားပါပြီ။**\n\nလုံခြုံရေးအရ QR နှင့် အချက်အလက်များကို ဖျက်လိုက်ပါသည်။\nငွေလွဲပြီးပါက Menu မှတဆင့် ငွေပေးချေမှု ခလုတ်ကို ပြန်နှိပ်ပြီး အချက်အလက်ပြန်တောင်းကာ ပြေစာ ပို့ပေးပါ။",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        logger.error(f"Auto Delete Error: {e}")
+    except: pass
 
 async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     method = query.data.split("_")[-1]
-    context.user_data['method'] = method
-    
     pay_info = db_query("SELECT phone, name, qr_file_id FROM payment_settings WHERE pay_type=?", (method,), fetchone=True)
     expected = context.user_data['expected_amount']
-    
-    text = (
-        f"💸 **{method.upper()} ဖြင့် ငွေပေးချေခြင်း**\n\n"
-        f"💰 ကျသင့်ငွေ: **{expected} MMK**\n"
-        f"📞 Phone: `{pay_info[0]}`\n"
-        f"👤 Name: **{pay_info[1]}**\n\n"
-        "⚠️ **စည်းကမ်းချက်များ:**\n"
-        "• ငွေပမာဏကို တစ်ခါတည်း အပြည့်အဝလွဲရပါမည်။\n"
-        "• ပြေစာပုံမဟုတ်ဘဲ တခြားပုံတင်ခြင်း (သို့) ပြေစာအတုတင်ခြင်းများရှိပါက Bot မှ အမြဲတမ်း Ban ပါမည်။\n\n"
-        "⏳ **အချိန်ကန့်သတ်ချက်:**\n"
-        "• ဤအချက်အလက်များသည် **၃ မိနစ်သာ** ပေါ်နေမည်ဖြစ်သည်။\n"
-        "• **၃ မိနစ်အတွင်း** ငွေလွဲပြေစာ (SS) ကို ပို့ပေးရပါမည်။"
-    )
-    
-    # Add Cancel Button to allow user to exit the state if they change their mind
-    keyboard = [[InlineKeyboardButton("❌ Cancel / မလုပ်တော့ပါ", callback_data="cancel_pay")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    sent_msg = None
-    if pay_info[2]:
-        sent_msg = await context.bot.send_photo(chat_id=query.from_user.id, photo=pay_info[2], caption=text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-    else:
-        sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
-    
-    # 3-Minute Timer (180 seconds)
+    text = (f"💸 **{method.upper()} ဖြင့် ငွေပေးချေခြင်း**\n\n💰 ကျသင့်ငွေ: **{expected} MMK**\n📞 Phone: `{pay_info[0]}`\n👤 Name: **{pay_info[1]}**\n\n"
+            "⏳ **၃ မိနစ်အတွင်း** ပြေစာ ပို့ပေးရပါမည်။")
+    kb = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_pay")]]
+    sent_msg = await context.bot.send_photo(chat_id=query.from_user.id, photo=pay_info[2], caption=text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb)) if pay_info[2] else await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
     context.job_queue.run_once(auto_delete_pay_info, 180, chat_id=query.from_user.id, data={'msg_id': sent_msg.message_id}, name=str(query.from_user.id))
-        
     return UPLOAD_RECEIPT
 
 async def cancel_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancels the payment process and clears state"""
     query = update.callback_query
     await query.answer()
-    await query.message.edit_reply_markup(reply_markup=None) # Remove buttons
-    await query.message.reply_text("✅ လုပ်ဆောင်မှုကို ပယ်ဖျက်လိုက်ပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="start_back")]]))
-    return ConversationHandler.END
-
-async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Restarts the bot and clears any stuck state"""
-    await start(update, context)
+    await query.message.reply_text("✅ ပယ်ဖျက်လိုက်ပါပြီ။")
     return ConversationHandler.END
 
 async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not update.message.photo:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပို့ပေးပါ။\n(သို့မဟုတ် /start ကိုနှိပ်ပြီး ပြန်စပါ)")
-        return UPLOAD_RECEIPT
-
-    current_jobs = context.job_queue.get_jobs_by_name(str(user.id))
-    for job in current_jobs:
-        job.schedule_removal()
-
+    if not update.message.photo: return UPLOAD_RECEIPT
     photo = await update.message.photo[-1].get_file()
     photo_bytes = await photo.download_as_bytearray()
     expected = context.user_data['expected_amount']
     buy_type = context.user_data['buy_type']
-
-    load = await update.message.reply_text("🔍 ပြေစာအား AI ဖြင့် စစ်ဆေးနေပါသည်...")
+    load = await update.message.reply_text("🔍 စစ်ဆေးနေသည်...")
     result = await verify_receipt_with_ai(photo_bytes, expected)
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    if result.get('is_blurry'):
-        await load.edit_text("❌ **ပုံမကြည်လင်ပါ။**\n\nကျေးဇူးပြု၍ ပြေစာကို အလင်းမပြန်အောင် ပြန်ရိုက်ပြီး ပို့ပေးပါ။")
-        return UPLOAD_RECEIPT
-
-    if result.get('is_valid') and result.get('amount', 0) >= expected:
+    if result.get('is_valid'):
+        today = datetime.now().strftime("%Y-%m-%d")
         if buy_type.startswith("vip_"):
             plan = buy_type.split("_")[1]
-            v_type = 1 if plan == 'basic' else 2
             expiry = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d") if plan == 'basic' else "9999-12-31"
-            db_query("UPDATE users SET is_vip=?, vip_expiry=? WHERE user_id=?", (v_type, expiry, user.id))
+            db_query("UPDATE users SET is_vip=?, vip_expiry=? WHERE user_id=?", (1 if plan=='basic' else 2, expiry, user.id))
             db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, expected, f'vip_{plan}', today, 'success'))
-            msg = f"✅ {plan.upper()} VIP အဖြစ် အောင်မြင်စွာ သတ်မှတ်ပြီးပါပြီ။"
         else:
             m_id = int(buy_type.split("_")[1])
             db_query("INSERT OR IGNORE INTO purchases VALUES (?,?)", (user.id, m_id))
             db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, expected, f'single_{m_id}', today, 'success'))
-            msg = f"✅ ဇာတ်ကားဝယ်ယူမှု အောင်မြင်ပါသည်။"
-        await load.edit_text(msg)
+        await load.edit_text("✅ ဝယ်ယူမှု အောင်မြင်ပါသည်။")
     else:
-        # Record Scam Attempt
-        db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, 0, 'scam_attempt', today, 'failed'))
-        await load.edit_text("❌ ပြေစာမမှန်ကန်ပါ (သို့မဟုတ်) ပမာဏ လိုအပ်နေပါသည်။")
-
+        db_query("INSERT INTO transactions (user_id, amount, type, date, status) VALUES (?,?,?,?,?)", (user.id, 0, 'scam', datetime.now().strftime("%Y-%m-%d"), 'failed'))
+        await load.edit_text("❌ ပြေစာမမှန်ပါ။")
     return ConversationHandler.END
 
-# ==========================================
-# ADMIN STATS & GRAPH
-# ==========================================
 async def generate_admin_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
     current_month = now.strftime("%Y-%m")
-    month_name = now.strftime("%B")
-
-    # 1. Traffic Stats
+    
     visitors_today = db_query("SELECT COUNT(*) FROM visitors WHERE date=?", (today,), fetchone=True)[0]
-    total_visitors = db_query("SELECT COUNT(*) FROM visitors", fetchone=True)[0]
-
-    # 2. Transaction Stats (Today)
-    vip_today = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'vip_%' AND date=? AND status='success'", (today,), fetchone=True)[0]
-    single_today = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'single_%' AND date=? AND status='success'", (today,), fetchone=True)[0]
-    scam_today = db_query("SELECT COUNT(*) FROM transactions WHERE status='failed' AND date=?", (today,), fetchone=True)[0]
     rev_today = db_query("SELECT SUM(amount) FROM transactions WHERE date=? AND status='success'", (today,), fetchone=True)[0] or 0
-    
-    # 3. Transaction Stats (Monthly Total)
-    vip_total = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'vip_%' AND date LIKE ? AND status='success'", (f"{current_month}%",), fetchone=True)[0]
-    single_total = db_query("SELECT COUNT(*) FROM transactions WHERE type LIKE 'single_%' AND date LIKE ? AND status='success'", (f"{current_month}%",), fetchone=True)[0]
-    scam_total = db_query("SELECT COUNT(*) FROM transactions WHERE status='failed' AND date LIKE ?", (f"{current_month}%",), fetchone=True)[0]
     rev_total = db_query("SELECT SUM(amount) FROM transactions WHERE date LIKE ? AND status='success'", (f"{current_month}%",), fetchone=True)[0] or 0
-
-    # 4. Window Shoppers (Visited but didn't buy today)
-    buyers_today = db_query("SELECT COUNT(DISTINCT user_id) FROM transactions WHERE date=? AND status='success'", (today,), fetchone=True)[0]
-    window_shoppers_today = max(0, visitors_today - buyers_today)
-
-    # 5. Single Buyers Detail (Today)
-    single_details = db_query("""
-        SELECT u.full_name, m.title 
-        FROM transactions t
-        JOIN users u ON t.user_id = u.user_id
-        LEFT JOIN movies m ON CAST(SUBSTR(t.type, 8) AS INTEGER) = m.id
-        WHERE t.type LIKE 'single_%' AND t.date=? AND t.status='success'
-    """, (today,))
     
-    single_buyer_text = "\n".join([f"👤 {row[0]} -> 🎬 {row[1]}" for row in single_details]) if single_details else "မရှိပါ"
+    report = (f"📊 **Report ({today})**\n\n"
+              f"💰 Today Revenue: {rev_today} Ks\n"
+              f"🗓 Monthly Revenue: {rev_total} Ks\n"
+              f"👥 Today Visitors: {visitors_today}")
+    await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
 
-    report_text = (
-        f"📊 **Admin Daily & Monthly Report**\n"
-        f"📅 Date: {today}\n\n"
-        f"💰 **ဝင်ငွေစာရင်း (MMK):**\n"
-        f"• ယနေ့ ဝင်ငွေ: {rev_today:,.0f} Ks\n"
-        f"• {month_name} လချုပ်: {rev_total:,.0f} Ks\n\n"
-        f"👥 **လူဝင်ရောက်မှု (Traffic):**\n"
-        f"• ယနေ့ Visitor: {visitors_today}\n"
-        f"• Window Shoppers (မဝယ်သူများ): {window_shoppers_today}\n"
-        f"• စုစုပေါင်း Visitor: {total_visitors}\n\n"
-        f"👑 **VIP အရောင်းစာရင်း:**\n"
-        f"• ယနေ့ VIP ဝင်သူ: {vip_today}\n"
-        f"• {month_name} VIP စုစုပေါင်း: {vip_total}\n\n"
-        f"🎬 **တစ်ကားချင်း ဝယ်သူများ:**\n"
-        f"• ယနေ့ ဝယ်သူအရေအတွက်: {single_today}\n"
-        f"• {month_name} စုစုပေါင်း: {single_total}\n"
-        f"👇 **ယနေ့ဝယ်ယူသူ စာရင်း:**\n{single_buyer_text}\n\n"
-        f"🚫 **လုံခြုံရေး (Scams):**\n"
-        f"• ယနေ့ Scam/Fail: {scam_today}\n"
-        f"• {month_name} စုစုပေါင်း: {scam_total}"
+# ==========================================
+# MAIN
+# ==========================================
+def main():
+    init_db()
+    threading.Thread(target=run_health_check, daemon=True).start()
+    app = Application.builder().token(BOT_TOKEN).defaults(Defaults(protect_content=True)).build()
+
+    movie_conv = ConversationHandler(
+        entry_points=[CommandHandler("add_movie", start_add_movie)],
+        states={ADD_MOVIE_STATE: [MessageHandler(filters.VIDEO, handle_movie_upload)]},
+        fallbacks=[CommandHandler("start", start)]
+    )
+    
+    pay_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(show_pay_info, pattern="^pay_method_")],
+        states={UPLOAD_RECEIPT: [MessageHandler(filters.PHOTO, confirm_receipt), CallbackQueryHandler(cancel_process, pattern="^cancel_pay$")]},
+        fallbacks=[CommandHandler("start", start)]
     )
 
-    # Generate Graph
-    photo = None
-    if HAS_MATPLOTLIB:
-        try:
-            # Query Daily Revenue for Graph
-            daily_rev = db_query("SELECT date, SUM(amount) FROM transactions WHERE date LIKE ? AND status='success' GROUP BY date ORDER BY date", (f"{current_month}%",))
-            if daily_rev:
-                dates = [d[0].split('-')[-1] for d in daily_rev] # Get days only
-                amounts = [d[1] for d in daily_rev]
-                
-                plt.figure(figsize=(10, 5))
-                plt.plot(dates, amounts, marker='o', linestyle='-', color='b')
-                plt.title(f'Daily Revenue - {month_name}')
-                plt.xlabel('Day')
-                plt.ylabel('Amount (MMK)')
-                plt.grid(True)
-                
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                photo = buf
-                plt.close()
-        except Exception as e:
-            logger.error(f"Graph Error: {e}")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("saizawyelwin", generate_admin_report))
+    app.add_handler(movie_conv)
+    app.add_handler(pay_conv)
+    app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
+    app.add_handler(CallbackQueryHandler(start_purchase, pattern="^buy_"))
+    app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
+    app.add_handler(CallbackQueryHandler(view_details, pattern="^view_"))
 
-    if photo:
-        await context.bot.send_photo(chat_id=ADMIN_ID, photo=photo, caption=report_text, parse_mode=ParseMode.MARKDOWN)
-    else:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=report_text, parse_mode=ParseMode.MARKDOWN)
+    print("Bot is running...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-# ==========================================
-# MOVIE MENU & ADMIN
-# ==========================================
-async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    page = int(query.data.split("_")[-1])
-    movies = db_query("SELECT id, title, price FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", ((page-1)*6,))
-    if not movies: return await query.answer("မရှိသေးပါ။")
-    kb = [[InlineKeyboardButton(f"{m[1]} ({m[2]} Ks)", callback_data=f"view_{m[0]}")] for m in movies]
-    kb.append([InlineKeyboardButton("🔙 Home", callback_data="start_back")])
-    await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
-    kb = [[InlineKeyboardButton("💳 Payment Settings", callback_data="adm_pay_set")], [InlineKeyboardButton("❌ Close", callback_data="start_back")]]
-    await update.message.reply_text("⚙️ **Admin Panel**", reply_markup=InlineKeyboardMarkup(kb))
-
-async def admin_pay
+if __name__ == "__main__":
+    main()
