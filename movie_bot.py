@@ -4,18 +4,19 @@ import threading
 import re
 import os
 import io
+import time
+import asyncio
 import matplotlib.pyplot as plt
 import matplotlib
 from datetime import datetime, timedelta
 from typing import Final
-from http.server import BaseHTTPRequestHandler, HTTPServer # Render အတွက် Server Library ထပ်ထည့်ထားပါတယ်
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Telegram Bot Library
 from telegram import (
     Update, 
     InlineKeyboardButton, 
-    InlineKeyboardMarkup,
-    InputMediaPhoto
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
     Application,
@@ -32,7 +33,7 @@ from telegram.constants import ParseMode
 matplotlib.use('Agg')
 
 # ==========================================
-# CONFIGURATION (ဒီနေရာမှာ အစ်ကို့ data တွေထည့်ပါ)
+# CONFIGURATION
 # ==========================================
 BOT_TOKEN: Final = "8515688348:AAEFbdCJ6HHR6p4cCgzvUvcRDr7i7u-sL6U" 
 ADMIN_ID: Final = 6445257462              
@@ -52,7 +53,7 @@ logger = logging.getLogger(__name__)
 db_lock = threading.Lock()
 
 # ==========================================
-# RENDER WEB SERVER (PORT BINDING FIX)
+# RENDER WEB SERVER (FIXED PORT BINDING)
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -60,13 +61,16 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Bot is alive and running!")
+    
+    def log_message(self, format, *args):
+        return
 
-def start_health_check_server():
-    # Render က ပေးတဲ့ PORT ကို ယူပါမယ် (မရှိရင် 8080)
+def run_health_check_server():
     port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    logger.info(f"🌍 Health check server listening on port {port}")
-    server.serve_forever()
+    server_address = ('0.0.0.0', port)
+    httpd = HTTPServer(server_address, HealthCheckHandler)
+    logger.info(f"🌍 Health check server started on port {port}")
+    httpd.serve_forever()
 
 # ==========================================
 # DATABASE SYSTEM
@@ -86,16 +90,15 @@ def db_query(query, args=(), fetchone=False, commit=True):
             return None
 
 def init_db():
-    # Users Table
     db_query('''CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY, 
         username TEXT, 
         full_name TEXT, 
         vip_type TEXT DEFAULT 'NONE', 
-        vip_expiry DATE
+        vip_expiry DATE,
+        joined_date DATETIME
     )''')
     
-    # Movies Table
     db_query('''CREATE TABLE IF NOT EXISTS movies (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         file_id TEXT, 
@@ -104,8 +107,6 @@ def init_db():
         channel_msg_id INTEGER
     )''')
     
-    # Transactions Table (To track scams, success, pending)
-    # status: 'PENDING', 'SUCCESS', 'SCAM'
     db_query('''CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT, 
         user_id INTEGER, 
@@ -117,14 +118,12 @@ def init_db():
     )''')
 
 # ==========================================
-# GRAPH GENERATION (Matplotlib)
+# GRAPH GENERATION
 # ==========================================
 def create_sales_graph():
-    # Get current month data
     now = datetime.now()
     start_date = now.replace(day=1, hour=0, minute=0, second=0)
     
-    # Query daily sums
     data = db_query('''
         SELECT strftime('%d', date) as day, SUM(amount) 
         FROM transactions 
@@ -143,17 +142,15 @@ def create_sales_graph():
         days = [int(now.day)]
         amounts = [0]
 
-    # Plotting
     plt.figure(figsize=(10, 5))
     plt.plot(days, amounts, marker='o', linestyle='-', color='#2ecc71', linewidth=2)
     plt.title(f"Revenue Graph - {now.strftime('%B %Y')}", fontsize=14, fontweight='bold')
     plt.xlabel('Day of Month')
     plt.ylabel('Amount (MMK)')
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.xticks(range(1, 32, 2))  # Show every 2nd day
+    plt.xticks(range(1, 32, 2))
     plt.tight_layout()
     
-    # Save to BytesIO buffer
     buf = io.BytesIO()
     plt.savefig(buf, format='png')
     buf.seek(0)
@@ -161,29 +158,19 @@ def create_sales_graph():
     return buf
 
 # ==========================================
-# ADMIN COMMANDS (/saizawyelwin)
+# ADMIN COMMANDS
 # ==========================================
 async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID: return
 
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # 1. VIP Joined Today
     vip_count = db_query("SELECT COUNT(*) FROM transactions WHERE item_name LIKE '%VIP%' AND status='SUCCESS' AND date LIKE ?", (f"{today}%",), fetchone=True)[0]
-    
-    # 2. Single Movie Buyers Today
     movie_count = db_query("SELECT COUNT(*) FROM transactions WHERE item_name NOT LIKE '%VIP%' AND status='SUCCESS' AND date LIKE ?", (f"{today}%",), fetchone=True)[0]
-    
-    # 3. Window Shoppers (Clicked buy button but didn't pay/upload receipt)
     window_shoppers = db_query("SELECT COUNT(*) FROM transactions WHERE status='PENDING' AND date LIKE ?", (f"{today}%",), fetchone=True)[0]
-    
-    # 4. Scammers (Marked as SCAM by admin)
     scam_count = db_query("SELECT COUNT(*) FROM transactions WHERE status='SCAM' AND date LIKE ?", (f"{today}%",), fetchone=True)[0]
-    
-    # 5. Total Revenue Today
     today_rev = db_query("SELECT SUM(amount) FROM transactions WHERE status='SUCCESS' AND date LIKE ?", (f"{today}%",), fetchone=True)[0] or 0
-    
-    # 6. Total Revenue Monthly
     this_month = datetime.now().strftime("%Y-%m")
     month_rev = db_query("SELECT SUM(amount) FROM transactions WHERE status='SUCCESS' AND date LIKE ?", (f"{this_month}%",), fetchone=True)[0] or 0
 
@@ -199,21 +186,20 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📅 **ဒီလဝင်ငွေ:** `{month_rev:,.0f} MMK`\n"
     )
 
-    # Generate Graph
     graph_img = create_sales_graph()
     
-    await update.message.reply_photo(
-        photo=graph_img,
-        caption=report_text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ ဇာတ်ကားတင်ရန်", callback_data="admin_upload_start")],
-            [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_admin")]
-        ])
-    )
+    reply_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ ဇာတ်ကားတင်ရန်", callback_data="admin_upload_start")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_admin")]
+    ])
+
+    if update.callback_query:
+        await update.callback_query.message.reply_photo(photo=graph_img, caption=report_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    else:
+        await update.message.reply_photo(photo=graph_img, caption=report_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
 
 # ==========================================
-# MOVIE UPLOAD & AUTO POST
+# MOVIE UPLOAD
 # ==========================================
 async def start_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -228,24 +214,20 @@ async def save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         lines = msg.caption.strip().split("\n")
-        # Extract Price (e.g., #3000)
         price_match = re.search(r'#(\d+)', lines[0])
         if not price_match: raise ValueError("Price not found")
         
         price = int(price_match.group(1))
         title = lines[1].strip() if len(lines) > 1 else "Unknown Movie"
         
-        # Save to DB
         db_query("INSERT INTO movies (file_id, title, price) VALUES (?,?,?)", (msg.video.file_id, title, price))
         movie_id = db_query("SELECT last_insert_rowid()", fetchone=True)[0]
         
-        # Create Deep Link Button for Channel
         bot_username = (await context.bot.get_me()).username
         deep_link = f"https://t.me/{bot_username}?start=buy_{movie_id}"
         
         kb = [[InlineKeyboardButton("💳 ဝယ်ယူရန် (Click Here)", url=deep_link)]]
         
-        # Post to Channel
         caption_text = (
             f"🎬 **{title}**\n\n"
             f"💰 ဈေးနှုန်း: **{price} MMK**\n"
@@ -260,9 +242,7 @@ async def save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         
-        # Update DB with channel msg id
         db_query("UPDATE movies SET channel_msg_id=? WHERE id=?", (sent_msg.message_id, movie_id))
-        
         await msg.reply_text(f"✅ **{title}** ကို Channel တွင် တင်ပြီးပါပြီ။")
         
     except Exception as e:
@@ -277,11 +257,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     user = update.effective_user
     
-    # Add user to DB if new
     db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", 
              (user.id, user.username, user.full_name, datetime.now()))
 
-    # Check for Deep Link (e.g., start=buy_12)
     if args and args[0].startswith("buy_"):
         try:
             movie_id = int(args[0].split("_")[1])
@@ -292,7 +270,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-    # Default Welcome Message
     text = (
         "👋 မင်္ဂလာပါ **Zan Movie Bot** မှ ကြိုဆိုပါသည်။\n\n"
         "👑 **VIP Plan များ**\n"
@@ -308,13 +285,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def show_payment_options(update: Update, item_name, amount):
-    # Log as Pending (Window Shopper)
     user_id = update.effective_user.id
     db_query("INSERT INTO transactions (user_id, item_name, amount, date) VALUES (?,?,?,?)", 
              (user_id, item_name, amount, datetime.now()))
     
     tx_id = db_query("SELECT last_insert_rowid()", fetchone=True)[0]
-    
     text = f"💳 **ငွေပေးချေရန် ရွေးချယ်ပါ**\n\n📝 ဝယ်ယူမည့်အရာ: **{item_name}**\n💰 ကျသင့်ငွေ: **{amount} MMK**"
     
     kb = [
@@ -337,15 +312,11 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("pay_select_"):
-        # From Main Menu VIP selection
         _, _, item, price = data.split("_")
         await show_payment_options(update, item, int(price))
         return
 
-    # User selected a payment method
     _, method, tx_id = data.split("_")
-    
-    # Store tx_id in context to wait for receipt
     context.user_data['current_tx_id'] = tx_id
     context.user_data['pay_method'] = method
     
@@ -364,9 +335,6 @@ async def payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
     return WAIT_RECEIPT
 
-# ==========================================
-# RECEIPT HANDLING & APPROVAL
-# ==========================================
 async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("❌ ဓာတ်ပုံ (Screenshot) သာ ပို့ပေးပါ။")
@@ -380,7 +348,6 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Session expired. ပြန်လည်စမ်းပါ။")
         return ConversationHandler.END
 
-    # Forward to Admin for Approval
     caption = (
         f"📩 **New Payment Verification**\n"
         f"👤 User: {user.full_name} (ID: `{user.id}`)\n"
@@ -409,20 +376,15 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action, tx_id, user_id = query.data.split("_")
     
     if action == "approve":
-        # Get Transaction Details
         tx = db_query("SELECT item_name, amount FROM transactions WHERE id=?", (tx_id,), fetchone=True)
         if tx:
             item_name = tx[0]
-            # Update Transaction Status
             db_query("UPDATE transactions SET status='SUCCESS', pay_method=? WHERE id=?", ("Paid", tx_id))
-            
-            # Send Success Message to User
             try:
                 if "VIP" in item_name:
                     db_query("UPDATE users SET vip_type=? WHERE user_id=?", (item_name, user_id))
                     await context.bot.send_message(user_id, f"🎉 ဂုဏ်ယူပါသည်။ **{item_name}** အောင်မြင်ပါသည်။")
                 else:
-                    # Find Movie File ID
                     movie = db_query("SELECT file_id, title FROM movies WHERE title=?", (item_name,), fetchone=True)
                     if movie:
                         await context.bot.send_video(user_id, video=movie[0], caption=f"🎬 **{movie[1]}**\nကျေးဇူးတင်ပါသည်။")
@@ -433,7 +395,9 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "scam":
         db_query("UPDATE transactions SET status='SCAM' WHERE id=?", (tx_id,))
-        await context.bot.send_message(int(user_id), "❌ သင်၏ ငွေလွှဲပြေစာ မမှန်ကန်ပါ။ (Rejected)")
+        try:
+            await context.bot.send_message(int(user_id), "❌ သင်၏ ငွေလွှဲပြေစာ မမှန်ကန်ပါ။ (Rejected)")
+        except: pass
         await query.message.edit_caption(caption=query.message.caption + "\n\n⚠️ **MARKED AS SCAM**")
 
 # ==========================================
@@ -442,12 +406,21 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     
-    # Start Health Check Server (Render အတွက် Port ဖွင့်ပေးခြင်း)
-    threading.Thread(target=start_health_check_server, daemon=True).start()
+    # 1. Render Port Binding Fix
+    port = int(os.environ.get("PORT", 8080))
+    logger.info(f"Starting Health Check Server on port {port}...")
+    threading.Thread(target=run_health_check_server, daemon=True).start()
     
+    # 2. Asyncio Event Loop Fix (Very Important for RuntimeError)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Conversation for Payment & Upload
+    # Handlers
     upload_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_upload, pattern="^admin_upload_start$")],
         states={ADD_MOVIE_STATE: [MessageHandler(filters.VIDEO, save_movie)]},
@@ -460,19 +433,18 @@ def main():
         fallbacks=[CommandHandler("start", start)]
     )
 
-    # Admin Commands
     app.add_handler(CommandHandler("saizawyelwin", admin_dashboard))
     app.add_handler(CallbackQueryHandler(admin_dashboard, pattern="^refresh_admin$"))
     app.add_handler(CallbackQueryHandler(admin_decision, pattern="^(approve|scam)_"))
-
-    # General Handlers
     app.add_handler(upload_conv)
     app.add_handler(pay_conv)
     app.add_handler(CallbackQueryHandler(payment_handler, pattern="^pay_select_"))
     app.add_handler(CommandHandler("start", start))
     
-    print("🤖 Bot is running on Render...")
-    app.run_polling()
+    logger.info("🤖 Bot is starting polling...")
+    
+    # Run polling with drop_pending_updates to avoid conflict
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
