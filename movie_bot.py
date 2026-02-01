@@ -7,7 +7,7 @@ import base64
 import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final
 
 from telegram import (
@@ -32,11 +32,11 @@ from telegram.constants import ParseMode
 # ==========================================
 BOT_TOKEN: Final = "8515688348:AAHg86mbsY60QAa8U-17xmQXM38o_ggDEM4" 
 ADMIN_ID: Final = 6445257462              
-CHANNEL_ID: Final = "@ZanchannelMM" # သင့် Channel Username ကို ဒီမှာ အမှန်ထည့်ပါ
+CHANNEL_ID: Final = "@ZanchannelMM" 
 DB_NAME: Final = "movie_database.db"
 GEMINI_API_KEY: Final = "AIzaSyA5y7nWKVSHSALeKSrG1fiTBTB0hdWUZtk" 
 
-# Pricing & Settings
+# Pricing
 PRICE_BASIC: Final = 10000
 PRICE_PRO: Final = 30000
 AUTO_DELETE_HOURS: Final = 24 
@@ -64,23 +64,18 @@ def run_health_check():
     server.serve_forever()
 
 # ==========================================
-# DATABASE
+# DATABASE INITIALIZATION
 # ==========================================
 def init_db():
     with db_lock:
         conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, is_vip INTEGER DEFAULT 0, joined_date DATE)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, is_vip INTEGER DEFAULT 0, joined_date DATE, last_active DATE)''')
         c.execute('''CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT, title TEXT, price INTEGER, added_date DATETIME, channel_post_id INTEGER)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER, movie_id INTEGER, PRIMARY KEY (user_id, movie_id))''')
+        c.execute('''CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, type TEXT, amount INTEGER, movie_id INTEGER, date DATE, is_scam INTEGER DEFAULT 0)''')
         c.execute('''CREATE TABLE IF NOT EXISTS payment_settings (pay_type TEXT PRIMARY KEY, phone TEXT, name TEXT, qr_file_id TEXT)''')
         
-        payments = [
-            ('kpay', '09960202983', 'Sai Zaw Ye Lwin', ''),
-            ('wave', '09960202983', 'Sai Zaw Ye Lwin', ''),
-            ('ayapay', 'None', 'None', ''),
-            ('cbpay', 'None', 'None', '')
-        ]
+        payments = [('kpay', '09960202983', 'Sai Zaw Ye Lwin', ''), ('wave', '09960202983', 'Sai Zaw Ye Lwin', ''), ('ayapay', 'None', 'None', ''), ('cbpay', 'None', 'None', '')]
         c.executemany("INSERT OR IGNORE INTO payment_settings VALUES (?,?,?,?)", payments)
         conn.commit()
         conn.close()
@@ -100,13 +95,23 @@ def db_query(query, args=(), fetchone=False, commit=True):
             return None
 
 # ==========================================
-# HELPERS
+# UI & CHART HELPERS
 # ==========================================
+def generate_line_graph(daily_data):
+    if not daily_data: return "No data available."
+    max_val = max([d[1] for d in daily_data]) if any(d[1] > 0 for d in daily_data) else 1
+    graph = "📈 **နေ့စဉ်ဝင်ငွေပြဇယား (MMK)**\n"
+    for date, amt in daily_data:
+        bar_len = int((amt/max_val)*10)
+        bar = "▇" * bar_len if amt > 0 else ""
+        graph += f"`{date[-5:]}: {amt:>6} MMK` {bar}\n"
+    return graph
+
 def get_start_info():
     text = (
         "🎬 **Zan Movie Channel Bot**\n\n"
         "**လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:**\n"
-        "⛔️ ဇာတ်ကားများကို SS ရိုက်ခြင်း၊ Record ဖမ်းခြင်း၊ Save လုပ်ခြင်း လုံးဝမရပါ။\n"
+        "⛔️ SS ရိုက်ခြင်း၊ Record ဖမ်းခြင်း၊ Save လုပ်ခြင်း လုံးဝမရပါ။\n"
         "✅ ဝယ်ယူထားသော ကားများကို ဤနေရာတွင် အမြဲပြန်ကြည့်နိုင်ပါသည်။\n\n"
         "👑 **VIP အစီအစဉ်များ**\n"
         "1️⃣ **Basic VIP (10000 Ks) - 1 Month**\n"
@@ -121,95 +126,128 @@ def get_start_info():
     ]
     return text, InlineKeyboardMarkup(kb)
 
+# ==========================================
+# AUTO JOBS
+# ==========================================
 async def auto_delete_post(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
     try:
-        await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=job.data)
-    except Exception as e:
-        logger.error(f"Auto delete error: {e}")
+        await context.bot.delete_message(chat_id=CHANNEL_ID, message_id=context.job.data)
+    except: pass
 
 async def back_to_start_auto(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
     try:
-        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
+        chat_id = context.job.chat_id
+        msg_id = context.job.data
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         text, markup = get_start_info()
-        await context.bot.send_message(chat_id=job.chat_id, text=text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
     except: pass
 
 # ==========================================
-# ADMIN CONTROL (Owner & Admin Only)
+# ADMIN: STATISTICS (လချုပ် အော်တို Reset ပါဝင်သည်)
 # ==========================================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Owner နှင့် Admin သာ သုံးခွင့်ပြုခြင်း
-    if update.effective_user.id != ADMIN_ID:
-        return # ဘာမှပြန်မလုပ်ပါ
-
-    text = "🛠 **Admin Panel**\n\nဇာတ်ကားတင်ရန် သို့မဟုတ် စာရင်းကြည့်ရန် ရွေးချယ်ပါ။"
-    kb = [
-        [InlineKeyboardButton("➕ ဇာတ်ကားသစ်တင်ရန်", callback_data="admin_add_movie")],
-        [InlineKeyboardButton("📊 အသုံးပြုသူစာရင်း", callback_data="admin_stats")],
-        [InlineKeyboardButton("🏠 Home", callback_data="start_back")]
-    ]
+    if update.effective_user.id != ADMIN_ID: return
+    
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    this_month_start = now.strftime("%Y-%m")
+    
+    # စာရင်းများတွက်ချက်ခြင်း
+    new_users_today = db_query("SELECT COUNT(*) FROM users WHERE joined_date=?", (today,), fetchone=True)[0]
+    vip_new_today = db_query("SELECT COUNT(*) FROM transactions WHERE type='vip' AND date=?", (today,), fetchone=True)[0]
+    single_new_today = db_query("SELECT COUNT(DISTINCT user_id) FROM transactions WHERE type='single' AND date=?", (today,), fetchone=True)[0]
+    scams_today = db_query("SELECT COUNT(*) FROM transactions WHERE is_scam=1 AND date=?", (today,), fetchone=True)[0]
+    
+    total_vip = db_query("SELECT COUNT(*) FROM users WHERE is_vip > 0", fetchone=True)[0]
+    total_single = db_query("SELECT COUNT(DISTINCT user_id) FROM transactions WHERE type='single'", fetchone=True)[0]
+    
+    # ဝင်ငွေ (လချုပ် - ဒီလအတွက်သာပြပါမည်၊ လကုန်ရင် နောက်လအတွက် အော်တို update ဖြစ်သည်)
+    monthly_rev = db_query("SELECT SUM(amount) FROM transactions WHERE date LIKE ? AND is_scam=0", (f"{this_month_start}%",), fetchone=True)[0] or 0
+    
+    # နေ့စဉ်ပြဇယား (နောက်ဆုံး ၇ ရက်)
+    daily_stats = []
+    for i in range(6, -1, -1):
+        day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        amt = db_query("SELECT SUM(amount) FROM transactions WHERE date=? AND is_scam=0", (day,), fetchone=True)[0] or 0
+        daily_stats.append((day, amt))
+    
+    graph_text = generate_line_graph(daily_stats)
+    
+    text = (
+        f"📊 **Zan Admin Dashboard ({now.strftime('%B %Y')})**\n\n"
+        f"📅 **ယနေ့စာရင်း ({today}):**\n"
+        f"• လူသစ်: {new_users_today} ဦး | VIP သစ်: {vip_new_today} ဦး\n"
+        f"• ကားဝယ်သူ: {single_new_today} ဦး | Scam: {scams_today} ခု\n\n"
+        f"📈 **စုစုပေါင်းစာရင်း:**\n"
+        f"• VIP စုစုပေါင်း: {total_vip} ဦး\n"
+        f"• တစ်ကားချင်းဝယ်သူစုစုပေါင်း: {total_single} ဦး\n\n"
+        f"💰 **ယခုလဝင်ငွေ ({now.strftime('%b')}): {monthly_rev} MMK**\n"
+        f"_(လကုန်ပါက နောက်လအတွက် စာရင်းအသစ် အလိုအလျောက်စပါမည်)_\n\n"
+        f"{graph_text}"
+    )
+    
+    kb = [[InlineKeyboardButton("➕ ဇာတ်ကားသစ်တင်ရန်", callback_data="admin_add_movie")],
+          [InlineKeyboardButton("🏠 Home", callback_data="start_back")]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
-async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.from_user.id != ADMIN_ID: return
-    
-    user_count = db_query("SELECT COUNT(*) FROM users", fetchone=True)[0]
-    movie_count = db_query("SELECT COUNT(*) FROM movies", fetchone=True)[0]
-    text = f"📊 **Bot စာရင်းဇယား**\n\n👥 စုစုပေါင်းအသုံးပြုသူ: {user_count} ဦး\n🎬 တင်ထားသောဇာတ်ကား: {movie_count} ကား"
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="start_back")]]
-    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-
+# ==========================================
+# ADMIN: MOVIE UPLOAD (Format သစ်)
+# ==========================================
 async def admin_add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.from_user.id != ADMIN_ID: return
-    
-    await query.message.reply_text("🎬 **ဇာတ်ကား Video ကို ပို့ပေးပါ။**\n\nCaption တွင် အောက်ပါအတိုင်းရေးပါ-\n`ဇာတ်ကားအမည် | ဈေးနှုန်း`")
+    await query.message.reply_text(
+        "🎬 **ဇာတ်ကား Video ကို ပို့ပေးပါ။**\n\n"
+        "Caption တွင် အောက်ပါအတိုင်းရေးပါ -\n"
+        "`#ဈေးနှုန်း` \n"
+        "`ဇာတ်ကားအမည်` \n\n"
+        "**ဥပမာ:**\n"
+        "`#2000` \n"
+        "`မြန်မာကားသစ်ကြီး`"
+    )
     return ADD_MOVIE_STATE
 
 async def admin_save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
     
     if not update.message.video or not update.message.caption:
-        await update.message.reply_text("❌ ပုံစံမမှန်ပါ။ Video နှင့် Caption (အမည် | ဈေးနှုန်း) တွဲပို့ပါ။")
+        await update.message.reply_text("❌ Video နှင့် Caption (#ဈေးနှုန်း နှင့် အမည်) တွဲပို့ပါ။")
         return ADD_MOVIE_STATE
 
-    status_msg = await update.message.reply_text("⏳ Processing...")
+    status = await update.message.reply_text("⏳ Processing...")
     try:
-        title_raw, price_raw = update.message.caption.split("|")
-        title = title_raw.strip()
-        price = int(price_raw.strip())
+        lines = update.message.caption.strip().split("\n")
+        if len(lines) < 2:
+            raise ValueError("Format incorrect")
+            
+        # ပထမစာကြောင်းက #ဈေးနှုန်း၊ ဒုတိယစာကြောင်းက အမည်
+        price_str = lines[0].strip().replace("#", "").replace("Ks", "").replace("MMK", "")
+        price = int(price_str)
+        title = lines[1].strip()
         file_id = update.message.video.file_id
         
-        # 1. Channel သို့ တင်ခြင်း
+        # 1. Channel Post
         post_text = f"🎬 **ဇာတ်ကားအသစ် တင်လိုက်ပါပြီ**\n\n📝 အမည်: **{title}**\n💰 ဈေးနှုန်း: **{price} MMK**\n\n👇 ကြည့်ရှုရန် Bot သို့ သွားပါ\n@{(await context.bot.get_me()).username}"
-        channel_msg = await context.bot.send_video(
-            chat_id=CHANNEL_ID,
-            video=file_id,
-            caption=post_text,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        channel_msg = await context.bot.send_video(chat_id=CHANNEL_ID, video=file_id, caption=post_text, parse_mode=ParseMode.MARKDOWN)
         
-        # 2. DB သိမ်းခြင်း
+        # 2. DB Insert
         db_query("INSERT INTO movies (file_id, title, price, added_date, channel_post_id) VALUES (?,?,?,?,?)", 
                  (file_id, title, price, datetime.now(), channel_msg.message_id))
         
         # 3. Schedule Delete
         context.job_queue.run_once(auto_delete_post, AUTO_DELETE_HOURS * 3600, data=channel_msg.message_id)
         
-        await status_msg.edit_text(f"✅ **{title}** ကို အောင်မြင်စွာ တင်ပြီးပါပြီ။")
+        await status.edit_text(f"✅ **{title}** ကို Channel နှင့် Menu တွင် Update လုပ်ပြီးပါပြီ။")
     except Exception as e:
-        logger.error(f"Save movie error: {e}")
-        await status_msg.edit_text("❌ အမှားအယွင်းရှိပါသည်။ (အမည် | ဈေးနှုန်း) ပုံစံမှန်အောင် ရေးပါ။")
+        logger.error(f"Save error: {e}")
+        await status.edit_text("❌ ပုံစံမှားနေပါသည်။ \n\n`#2000` (ပထမစာကြောင်း)\n`ကားအမည်` (ဒုတိယစာကြောင်း) \n\nဟု ရေးပေးပါ။")
     
     return ConversationHandler.END
 
 # ==========================================
-# USER HANDLERS
+# USER & MOVIE MENU
 # ==========================================
 async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -219,21 +257,21 @@ async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not movies:
         return await query.message.edit_text("🎬 **လက်ရှိတွင် ဇာတ်ကားများ မရှိသေးပါ**", 
-                                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="start_back")]]), 
-                                            parse_mode=ParseMode.MARKDOWN)
+                                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="start_back")]]))
         
     kb = [[InlineKeyboardButton(f"🎬 {m[1]} ({m[2]} Ks)", callback_data=f"view_{m[0]}")] for m in movies]
     nav = []
-    if page > 1: nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"movie_menu_{page-1}"))
-    if db_query("SELECT 1 FROM movies LIMIT 1 OFFSET ?", (page*6,)): nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"movie_menu_{page+1}"))
+    if page > 1: nav.append(InlineKeyboardButton("⬅️ ရှေ့သို့", callback_data=f"movie_menu_{page-1}"))
+    if db_query("SELECT 1 FROM movies LIMIT 1 OFFSET ?", (page*6,)): nav.append(InlineKeyboardButton("နောက်သို့ ➡️", callback_data=f"movie_menu_{page+1}"))
     if nav: kb.append(nav)
     kb.append([InlineKeyboardButton("🏠 Home", callback_data="start_back")])
     await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", 
-             (user.id, user.username, user.full_name, datetime.now().strftime("%Y-%m-%d")))
+    today = datetime.now().strftime("%Y-%m-%d")
+    db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date, last_active) VALUES (?,?,?,?,?)", 
+             (user.id, user.username, user.full_name, today, today))
     
     text, markup = get_start_info()
     if update.callback_query:
@@ -243,38 +281,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
     return ConversationHandler.END
 
-# Payment logic အဟောင်းများကို ဆက်လက်ထားရှိသည်...
-# (Confirm Receipt, Show Pay Info စသည်တို့ ပါဝင်ပြီးသားဖြစ်ပါစေ)
-
 # ==========================================
-# MAIN
+# MAIN EXECUTION
 # ==========================================
 def main():
     init_db()
     threading.Thread(target=run_health_check, daemon=True).start()
-    
     app = Application.builder().token(BOT_TOKEN).defaults(Defaults(protect_content=True)).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_add_movie_start, pattern="^admin_add_movie"),
-        ],
-        states={
-            ADD_MOVIE_STATE: [MessageHandler(filters.VIDEO, admin_save_movie)],
-        },
-        fallbacks=[CommandHandler("start", start)],
+        entry_points=[CallbackQueryHandler(admin_add_movie_start, pattern="^admin_add_movie")],
+        states={ADD_MOVIE_STATE: [MessageHandler(filters.VIDEO, admin_save_movie)]},
+        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(start, pattern="^start_back$")],
         allow_reentry=True
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("saizawyelwin", admin_panel)) # Owner အတွက် Command
+    app.add_handler(CommandHandler("saizawyelwin", admin_panel))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
-    app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
     app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
 
-    print("Bot is starting...")
-    app.run_polling(drop_pending_updates=True) # Conflict မဖြစ်အောင် drop_pending_updates ထည့်ထားသည်
+    print("Zan Movie Bot is active...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
