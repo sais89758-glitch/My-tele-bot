@@ -43,6 +43,7 @@ PRICE_PRO: Final = 30000
 # Conversation States
 UPLOAD_RECEIPT = 1
 ADD_MOVIE_STATE = 2
+EDIT_PAY_STATE = 3
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -126,9 +127,7 @@ async def back_to_start_auto(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     try:
         text, markup = get_start_info()
-        # Photo message ဖြစ်ဖြစ် Text message ဖြစ်ဖြစ် Start menu အဖြစ် ပြန်ပြောင်းပေးမည်
         try:
-            # Photo caption ကို အရင်ပြင်ရန် ကြိုးစားသည်
             await context.bot.edit_message_caption(
                 chat_id=job.chat_id,
                 message_id=job.data,
@@ -137,7 +136,6 @@ async def back_to_start_auto(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN
             )
         except:
-            # Photo မဟုတ်ပါက Text ကို ပြင်သည်
             await context.bot.edit_message_text(
                 chat_id=job.chat_id,
                 message_id=job.data,
@@ -147,6 +145,40 @@ async def back_to_start_auto(context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Failed to auto back to start: {e}")
+
+# ==========================================
+# ADMIN HANDLERS
+# ==========================================
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    
+    text = "🛠 **Admin Control Panel**\n\nဇာတ်ကားအသစ်တင်ရန် (သို့) ငွေလွှဲအချက်အလက်ပြင်ရန် ခလုတ်များကို နှိပ်ပါ။"
+    kb = [
+        [InlineKeyboardButton("➕ ဇာတ်ကားအသစ်တင်ရန်", callback_data="admin_add_movie")],
+        [InlineKeyboardButton("💳 ငွေလွှဲအချက်အလက်ပြင်ရန်", callback_data="admin_edit_pay")],
+        [InlineKeyboardButton("📊 အသုံးပြုသူစာရင်းကြည့်ရန်", callback_data="admin_stats")]
+    ]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+
+async def admin_add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("🎬 **ဇာတ်ကား Video ကို Bot ဆီသို့ ပို့ပေးပါ။**\nCaption တွင် `ဇာတ်ကားအမည် | ဈေးနှုန်း` ဟု ရေးပေးပါ။\nဥပမာ- `Spiderman | 2000` ")
+    return ADD_MOVIE_STATE
+
+async def admin_save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.video or not update.message.caption:
+        await update.message.reply_text("❌ ပုံစံမမှန်ပါ။ Video နှင့် Caption (Name | Price) တွဲပို့ပါ။")
+        return ADD_MOVIE_STATE
+    
+    try:
+        title, price = update.message.caption.split("|")
+        file_id = update.message.video.file_id
+        db_query("INSERT INTO movies (file_id, title, price, added_date) VALUES (?,?,?,?)", 
+                 (file_id, title.strip(), int(price.strip()), datetime.now().strftime("%Y-%m-%d")))
+        await update.message.reply_text("✅ ဇာတ်ကားသိမ်းဆည်းပြီးပါပြီ။")
+    except:
+        await update.message.reply_text("❌ စာသားပုံစံမှားနေပါသည်။ (Name | Price) ဟု ရေးပါ။")
+    
+    return ConversationHandler.END
 
 # ==========================================
 # AI RECEIPT VERIFICATION
@@ -218,9 +250,7 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
     
-    # ၃ မိနစ် (စက္ကန့် ၁၈၀) ပြည့်လျှင် Start Menu သို့ ပြန်သွားရန် Job သတ်မှတ်ခြင်း
     context.job_queue.run_once(back_to_start_auto, 180, chat_id=query.from_user.id, data=msg.message_id)
-    
     return UPLOAD_RECEIPT
 
 async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -290,19 +320,27 @@ def main():
     
     app = Application.builder().token(BOT_TOKEN).defaults(Defaults(protect_content=True)).build()
 
-    pay_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(show_pay_info, pattern="^pay_")],
+    # Conversation for Payment & Admin
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(show_pay_info, pattern="^pay_"),
+            CallbackQueryHandler(admin_add_movie_start, pattern="^admin_add_movie")
+        ],
         states={
             UPLOAD_RECEIPT: [
                 MessageHandler(filters.PHOTO, confirm_receipt), 
                 CallbackQueryHandler(lambda u,c: ConversationHandler.END, pattern="^cancel_pay$")
+            ],
+            ADD_MOVIE_STATE: [
+                MessageHandler(filters.VIDEO, admin_save_movie)
             ]
         },
         fallbacks=[CommandHandler("start", start)]
     )
 
-    app.add_handler(pay_handler)
+    app.add_handler(conv_handler)
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("saizawyelwin", admin_panel)) # ဒီမှာ Command ထည့်ထားပါတယ်
     app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
     app.add_handler(CallbackQueryHandler(start_purchase, pattern="^buy_"))
     app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
