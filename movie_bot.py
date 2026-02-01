@@ -255,21 +255,38 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• **၃ မိနစ်အတွင်း** ငွေလွဲပြေစာ (SS) ကို ပို့ပေးရပါမည်။"
     )
     
+    # Add Cancel Button to allow user to exit the state if they change their mind
+    keyboard = [[InlineKeyboardButton("❌ Cancel / မလုပ်တော့ပါ", callback_data="cancel_pay")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     sent_msg = None
     if pay_info[2]:
-        sent_msg = await context.bot.send_photo(chat_id=query.from_user.id, photo=pay_info[2], caption=text, parse_mode=ParseMode.MARKDOWN)
+        sent_msg = await context.bot.send_photo(chat_id=query.from_user.id, photo=pay_info[2], caption=text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     else:
-        sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
     
     # 3-Minute Timer (180 seconds)
     context.job_queue.run_once(auto_delete_pay_info, 180, chat_id=query.from_user.id, data={'msg_id': sent_msg.message_id}, name=str(query.from_user.id))
         
     return UPLOAD_RECEIPT
 
+async def cancel_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancels the payment process and clears state"""
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_reply_markup(reply_markup=None) # Remove buttons
+    await query.message.reply_text("✅ လုပ်ဆောင်မှုကို ပယ်ဖျက်လိုက်ပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="start_back")]]))
+    return ConversationHandler.END
+
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Restarts the bot and clears any stuck state"""
+    await start(update, context)
+    return ConversationHandler.END
+
 async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not update.message.photo:
-        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပို့ပေးပါ။")
+        await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပို့ပေးပါ။\n(သို့မဟုတ် /start ကိုနှိပ်ပြီး ပြန်စပါ)")
         return UPLOAD_RECEIPT
 
     current_jobs = context.job_queue.get_jobs_by_name(str(user.id))
@@ -422,84 +439,4 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("💳 Payment Settings", callback_data="adm_pay_set")], [InlineKeyboardButton("❌ Close", callback_data="start_back")]]
     await update.message.reply_text("⚙️ **Admin Panel**", reply_markup=InlineKeyboardMarkup(kb))
 
-async def admin_pay_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    kb = [[InlineKeyboardButton("Edit KPay", callback_data="edit_pay_kpay"), InlineKeyboardButton("Edit Wave", callback_data="edit_pay_wave")],
-          [InlineKeyboardButton("Edit AYAPay", callback_data="edit_pay_ayapay"), InlineKeyboardButton("Edit CBPay", callback_data="edit_pay_cbpay")],
-          [InlineKeyboardButton("🔙 Back", callback_data="start_back")]]
-    await query.message.edit_text("ပြင်ဆင်လိုသည့် Payment ရွေးပါ -", reply_markup=InlineKeyboardMarkup(kb))
-
-async def start_edit_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data['edit_method'] = query.data.split("_")[-1]
-    await query.message.reply_text(f"📝 {context.user_data['edit_method'].upper()} အတွက် အချက်အလက်ပို့ပါ။\n\nပုံစံ:\n`ဖုန်းနံပါတ်` \n`နာမည်` \n\n(သို့မဟုတ် QR ပုံကို caption တွင် အထက်ပါအတိုင်းရေး၍ ပို့ပါ။)")
-    return SETTING_PAY_INFO
-
-async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
-    method = context.user_data['edit_method']
-    qr_id = update.message.photo[-1].file_id if update.message.photo else ""
-    raw_text = update.message.caption if update.message.photo else update.message.text
-    
-    if not raw_text:
-        await update.message.reply_text("❌ စာသားထည့်ပေးရန် လိုအပ်ပါသည်။")
-        return SETTING_PAY_INFO
-
-    lines = [line.strip() for line in raw_text.replace('|', '\n').split('\n') if line.strip()]
-    
-    try:
-        if len(lines) >= 2:
-            phone = lines[0]
-            name = lines[1]
-            db_query("UPDATE payment_settings SET phone=?, name=?, qr_file_id=? WHERE pay_type=?", (phone, name, qr_id, method))
-            await update.message.reply_text(f"✅ {method.upper()} အတွက် အချက်အလက်များ သိမ်းဆည်းပြီးပါပြီ။\n\n📞 ဖုန်း: {phone}\n👤 နာမည်: {name}")
-        else:
-            raise ValueError("Invalid format")
-    except Exception as e:
-        await update.message.reply_text("❌ ပုံစံမှားနေပါသည်။ \n\nဖုန်းနံပါတ် (စာကြောင်းအသစ်ဆင်း) \nနာမည် \n\nပုံစံအတိုင်း ပို့ပေးပါ။")
-        return SETTING_PAY_INFO
-        
-    return ConversationHandler.END
-
-# ==========================================
-# MAIN
-# ==========================================
-def main():
-    init_db()
-    
-    # Start Health Check in a separate thread
-    threading.Thread(target=run_health_check, daemon=True).start()
-    
-    defaults = Defaults(protect_content=True)
-    app = Application.builder().token(BOT_TOKEN).defaults(defaults).build()
-
-    buy_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(show_pay_info, pattern="^pay_method_")],
-        states={UPLOAD_RECEIPT: [MessageHandler(filters.PHOTO, confirm_receipt)]},
-        fallbacks=[CommandHandler("start", start)]
-    )
-    
-    admin_pay_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_edit_pay, pattern="^edit_pay_")],
-        states={SETTING_PAY_INFO: [MessageHandler(filters.TEXT | filters.PHOTO, save_pay_info)]},
-        fallbacks=[CommandHandler("start", start)]
-    )
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("saizawyelwin", generate_admin_report)) # Changed to Direct Report
-    app.add_handler(admin_pay_conv)
-    app.add_handler(buy_conv)
-    app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
-    app.add_handler(CallbackQueryHandler(start_purchase, pattern="^buy_"))
-    app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
-    app.add_handler(CallbackQueryHandler(view_details, pattern="^view_"))
-    app.add_handler(CallbackQueryHandler(admin_pay_settings, pattern="^adm_pay_set$"))
-
-    # Render Conflict Fix: drop_pending_updates=True clears old requests
-    print("Bot is starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+async def admin_pay
