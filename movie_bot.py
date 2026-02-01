@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import threading
 import re
+import os
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -24,9 +25,11 @@ from telegram.constants import ParseMode
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# သတိပေးချက် - Bot Token ကို ဒီအတိုင်းထားခြင်းက မလုံခြုံပါ။ 
-# တကယ် run မယ်ဆိုရင် Environment Variable ထဲမှာ ထည့်သုံးသင့်ပါတယ်။
-BOT_TOKEN: Final = "8515688348:AAHg86mbsY60QAa8U-17xmQXM38o_ggDEM4" 
+# Render သို့မဟုတ် Server တွင် run ပါက Environment Variable ထဲတွင် 'BOT_TOKEN' ကို ထည့်သွင်းပါ။
+# Local တွင် run လိုပါက ဒုတိယ parameter နေရာတွင် Token အသစ်ကို ထည့်သွင်းပါ။
+# ယခင် Token မှာ Invalid ဖြစ်နေသဖြင့် အသစ်ပြန်ထည့်ရန် လိုအပ်ပါသည်။
+BOT_TOKEN: Final = os.getenv("BOT_TOKEN", "REPLACE_WITH_YOUR_NEW_TOKEN_FROM_BOTFATHER")
+
 ADMIN_ID: Final = 6445257462              
 CHANNEL_ID: Final = "@ZanchannelMM" 
 DB_NAME: Final = "movie_database.db"
@@ -308,6 +311,10 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ==========================================
 def main():
+    if BOT_TOKEN == "REPLACE_WITH_YOUR_NEW_TOKEN_FROM_BOTFATHER":
+        print("❌ Error: Bot Token မထည့်ရသေးပါ။ BotFather ထံမှ Token အသစ်ယူပြီး ထည့်ပါ။")
+        return
+
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
 
