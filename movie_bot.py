@@ -6,6 +6,7 @@ import os
 import base64
 import asyncio
 import threading
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 from typing import Final
@@ -30,7 +31,6 @@ from telegram.constants import ParseMode
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Updated with your new token
 BOT_TOKEN: Final = "8515688348:AAHg86mbsY60QAa8U-17xmQXM38o_ggDEM4" 
 ADMIN_ID: Final = 6445257462              
 CHANNEL_URL: Final = "https://t.me/ZanchannelMM" 
@@ -52,17 +52,18 @@ logger = logging.getLogger(__name__)
 db_lock = threading.Lock()
 
 # ==========================================
-# RENDER HEALTH CHECK SERVER
+# RENDER HEALTH CHECK SERVER (Keep Alive)
 # ==========================================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b"Bot is active and running!")
 
 def run_health_check():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    logger.info(f"Health check server started on port {port}")
     server.serve_forever()
 
 # ==========================================
@@ -202,7 +203,6 @@ async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def auto_delete_pay_info(context: ContextTypes.DEFAULT_TYPE):
-    """၃ မိနစ်ပြည့်ပါက ငွေပေးချေမှု အချက်အလက်များကို ဖျက်ခြင်း"""
     job = context.job
     try:
         await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data['msg_id'])
@@ -228,15 +228,12 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 ကျသင့်ငွေ: **{expected} MMK**\n"
         f"📞 Phone: `{pay_info[0]}`\n"
         f"👤 Name: **{pay_info[1]}**\n\n"
-        "⚠️ **စည်းကမ်းချက်များ (သေချာဖတ်ပါ):**\n"
+        "⚠️ **စည်းကမ်းချက်များ:**\n"
         "• ငွေပမာဏကို တစ်ခါတည်း အပြည့်အဝလွဲရပါမည်။\n"
-        "• ခွဲလွဲခြင်း (သို့) ပမာဏမပြည့်ပါက ပြန်အမ်းမည်မဟုတ်သလို ဖွင့်ပေးမည်လည်းမဟုတ်ပါ။\n"
-        "• ပြေစာပုံမဟုတ်ဘဲ တခြားပုံတင်ခြင်း (သို့) ပြေစာအတုတင်ခြင်းများ (Scam) ရှိပါက Bot မှ အမြဲတမ်း Ban ပါမည်။\n\n"
+        "• ပြေစာပုံမဟုတ်ဘဲ တခြားပုံတင်ခြင်း (သို့) ပြေစာအတုတင်ခြင်းများရှိပါက Bot မှ အမြဲတမ်း Ban ပါမည်။\n\n"
         "⏳ **အချိန်ကန့်သတ်ချက်:**\n"
         "• ဤအချက်အလက်များသည် **၃ မိနစ်သာ** ပေါ်နေမည်ဖြစ်သည်။\n"
-        "• **၃ မိနစ်အတွင်း** ငွေလွဲပြေစာ (SS) ကို ပို့ပေးရပါမည်။\n"
-        "• အချိန်မီမပို့နိုင်ပါက ငွေကို အရင်လွဲထားပြီးမှ အချက်အလက်ပြန်တောင်းပြီး ပြေစာပို့ပါ။\n"
-        "• ပုံမကြည်လင်ပါက စနစ်မှ လက်ခံမည်မဟုတ်ပါ။"
+        "• **၃ မိနစ်အတွင်း** ငွေလွဲပြေစာ (SS) ကို ပို့ပေးရပါမည်။"
     )
     
     sent_msg = None
@@ -245,7 +242,7 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         sent_msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     
-    # 3-Minute Timer (180 seconds)
+    # 3-Minute Timer
     context.job_queue.run_once(auto_delete_pay_info, 180, chat_id=query.from_user.id, data={'msg_id': sent_msg.message_id}, name=str(query.from_user.id))
         
     return UPLOAD_RECEIPT
@@ -256,7 +253,6 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ကျေးဇူးပြု၍ ပြေစာ Screenshot ပို့ပေးပါ။")
         return UPLOAD_RECEIPT
 
-    # Stop Timer
     current_jobs = context.job_queue.get_jobs_by_name(str(user.id))
     for job in current_jobs:
         job.schedule_removal()
@@ -270,7 +266,7 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = await verify_receipt_with_ai(photo_bytes, expected)
 
     if result.get('is_blurry'):
-        await load.edit_text("❌ **ပုံမကြည်လင်ပါ (သို့မဟုတ်) အလင်းပြန်နေပါသည်။**\n\nကျေးဇူးပြု၍ ပြေစာကို အလင်းမပြန်အောင် ပြန်ရိုက်ပြီး ပို့ပေးပါ။")
+        await load.edit_text("❌ **ပုံမကြည်လင်ပါ။**\n\nကျေးဇူးပြု၍ ပြေစာကို အလင်းမပြန်အောင် ပြန်ရိုက်ပြီး ပို့ပေးပါ။")
         return UPLOAD_RECEIPT
 
     if result.get('is_valid') and result.get('amount', 0) >= expected:
@@ -283,7 +279,7 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             m_id = int(buy_type.split("_")[1])
             db_query("INSERT OR IGNORE INTO purchases VALUES (?,?)", (user.id, m_id))
-            msg = f"✅ ဇာတ်ကားဝယ်ယူမှု အောင်မြင်ပါသည်။ ဤ Channel တွင် ရာသက်ပန် ကြည့်ရှုနိုင်ပါပြီ။"
+            msg = f"✅ ဇာတ်ကားဝယ်ယူမှု အောင်မြင်ပါသည်။"
         await load.edit_text(msg)
     else:
         await load.edit_text("❌ ပြေစာမမှန်ကန်ပါ (သို့မဟုတ်) ပမာဏ လိုအပ်နေပါသည်။")
@@ -320,19 +316,35 @@ async def start_edit_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data['edit_method'] = query.data.split("_")[-1]
-    await query.message.reply_text(f"📝 {context.user_data['edit_method'].upper()} အတွက် `ဖုန်းနံပါတ် | နာမည်` ပို့ပါ။ (သို့မဟုတ်) QR ပုံကို caption တွင် `ဖုန်း | နာမည်` ရေးပြီး ပို့ပါ။")
+    await query.message.reply_text(f"📝 {context.user_data['edit_method'].upper()} အတွက် အချက်အလက်ပို့ပါ။\n\nပုံစံ:\n`ဖုန်းနံပါတ်` \n`နာမည်` \n\n(သို့မဟုတ် QR ပုံကို caption တွင် အထက်ပါအတိုင်းရေး၍ ပို့ပါ။)")
     return SETTING_PAY_INFO
 
 async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
     method = context.user_data['edit_method']
     qr_id = update.message.photo[-1].file_id if update.message.photo else ""
-    text = update.message.caption if update.message.photo else update.message.text
+    raw_text = update.message.caption if update.message.photo else update.message.text
+    
+    if not raw_text:
+        await update.message.reply_text("❌ စာသားထည့်ပေးရန် လိုအပ်ပါသည်။")
+        return SETTING_PAY_INFO
+
+    # ပုံထဲကအတိုင်း Line break တွေကို handle လုပ်ဖို့ စာသားကို ခွဲထုတ်ခြင်း
+    # ဖုန်းနံပါတ်နဲ့ နာမည်ကို ရှာဖွေခြင်း (စာကြောင်းအသစ်တွေပါ စစ်ဆေးသည်)
+    lines = [line.strip() for line in raw_text.replace('|', '\n').split('\n') if line.strip()]
+    
     try:
-        phone, name = [x.strip() for x in text.split("|")]
-        db_query("UPDATE payment_settings SET phone=?, name=?, qr_file_id=? WHERE pay_type=?", (phone, name, qr_id, method))
-        await update.message.reply_text("✅ သိမ်းဆည်းပြီးပါပြီ။")
-    except: await update.message.reply_text("❌ ပုံစံမှားနေသည်။ `ဖုန်းနံပါတ် | နာမည်` ပုံစံအတိုင်း ပို့ပါ။")
+        if len(lines) >= 2:
+            phone = lines[0]
+            name = lines[1]
+            db_query("UPDATE payment_settings SET phone=?, name=?, qr_file_id=? WHERE pay_type=?", (phone, name, qr_id, method))
+            await update.message.reply_text(f"✅ {method.upper()} အတွက် အချက်အလက်များ သိမ်းဆည်းပြီးပါပြီ။\n\n📞 ဖုန်း: {phone}\n👤 နာမည်: {name}")
+        else:
+            raise ValueError("Invalid format")
+    except Exception as e:
+        await update.message.reply_text("❌ ပုံစံမှားနေပါသည်။ \n\nဖုန်းနံပါတ် (စာကြောင်းအသစ်ဆင်း) \nနာမည် \n\nပုံစံအတိုင်း ပို့ပေးပါ။")
+        return SETTING_PAY_INFO
+        
     return ConversationHandler.END
 
 # ==========================================
@@ -340,6 +352,8 @@ async def save_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def main():
     init_db()
+    
+    # Start Health Check in a separate thread
     threading.Thread(target=run_health_check, daemon=True).start()
     
     defaults = Defaults(protect_content=True)
@@ -367,8 +381,8 @@ def main():
     app.add_handler(CallbackQueryHandler(view_details, pattern="^view_"))
     app.add_handler(CallbackQueryHandler(admin_pay_settings, pattern="^adm_pay_set$"))
 
-    print("Bot is starting with new token...")
-    # drop_pending_updates will prevent conflict from old messages
+    # Render Conflict Fix: drop_pending_updates=True clears old requests
+    print("Bot is starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
