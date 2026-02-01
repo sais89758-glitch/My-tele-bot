@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 from datetime import datetime, timedelta
 from typing import Final
+from http.server import BaseHTTPRequestHandler, HTTPServer # Render အတွက် Server Library ထပ်ထည့်ထားပါတယ်
 
 # Telegram Bot Library
 from telegram import (
@@ -49,6 +50,23 @@ WAIT_RECEIPT = 2
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 db_lock = threading.Lock()
+
+# ==========================================
+# RENDER WEB SERVER (PORT BINDING FIX)
+# ==========================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is alive and running!")
+
+def start_health_check_server():
+    # Render က ပေးတဲ့ PORT ကို ယူပါမယ် (မရှိရင် 8080)
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logger.info(f"🌍 Health check server listening on port {port}")
+    server.serve_forever()
 
 # ==========================================
 # DATABASE SYSTEM
@@ -423,6 +441,10 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def main():
     init_db()
+    
+    # Start Health Check Server (Render အတွက် Port ဖွင့်ပေးခြင်း)
+    threading.Thread(target=start_health_check_server, daemon=True).start()
+    
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Conversation for Payment & Upload
@@ -449,7 +471,7 @@ def main():
     app.add_handler(CallbackQueryHandler(payment_handler, pattern="^pay_select_"))
     app.add_handler(CommandHandler("start", start))
     
-    print("🤖 Bot is running with Graph Support...")
+    print("🤖 Bot is running on Render...")
     app.run_polling()
 
 if __name__ == "__main__":
