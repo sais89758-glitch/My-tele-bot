@@ -121,6 +121,16 @@ async def broadcast_new_movie(context: ContextTypes.DEFAULT_TYPE, title: str, mo
         except: continue
 
 # ==========================================
+# AUTO DELETE HANDLER
+# ==========================================
+async def delete_pay_message(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    try:
+        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
+    except Exception as e:
+        logger.error(f"Failed to delete pay message: {e}")
+
+# ==========================================
 # HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,24 +230,48 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     method = query.data.split("_")[-1]
     pay = db_query("SELECT phone, name, qr_file_id FROM payment_settings WHERE pay_type=?", (method,), fetchone=True)
-    text = f"💸 **{method.upper()}**\n💰 Amount: {context.user_data['expected_amount']} Ks\n📞 `{pay[0]}`\n👤 {pay[1]}\n\nပြေစာ ပို့ပေးပါ။"
+    expected = context.user_data['expected_amount']
+    
+    text = (f"💸 **{method.upper()} ဖြင့် ငွေပေးချေခြင်း**\n\n"
+            f"💰 ကျသင့်ငွေ: **{expected} MMK**\n"
+            f"📞 Phone: `{pay[0]}`\n"
+            f"👤 Name: **{pay[1]}**\n\n"
+            "⚠️ **အရေးကြီးသတိပေးချက်**\n"
+            f"ငွေပေးချေရာတွင် ကျသင့်ငွေ **{expected} ကျပ်** ကို တစ်ကြိမ်တည်း အပြည့်လွှဲရပါမည်။ "
+            "ခွဲလွှဲပါက ငွေပြန်အမ်းမည်မဟုတ်သလို ဇာတ်ကားလည်း ကြည့်ရှုခွင့်ရမည်မဟုတ်ပါ။\n\n"
+            "⏳ **၃ မိနစ်အတွင်း** ပြေစာ ပို့ပေးရပါမည်။ ၃ မိနစ်ပြည့်ပါက ဤ Message အလိုအလျောက် ပျက်သွားပါမည်။")
+    
     kb = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_pay")]]
-    if pay[2]: await context.bot.send_photo(chat_id=query.from_user.id, photo=pay[2], caption=text, reply_markup=InlineKeyboardMarkup(kb))
-    else: await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    
+    # Send payment info
+    if pay[2]:
+        msg = await context.bot.send_photo(chat_id=query.from_user.id, photo=pay[2], caption=text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+    else:
+        msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+    
+    # Schedule deletion after 180 seconds (3 mins)
+    context.job_queue.run_once(delete_pay_message, 180, chat_id=query.from_user.id, data=msg.message_id)
+    
     return UPLOAD_RECEIPT
 
 async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo: return UPLOAD_RECEIPT
     f = await update.message.photo[-1].get_file()
-    res = await verify_receipt_with_ai(await f.download_as_bytearray(), context.user_data['expected_amount'])
+    expected = context.user_data['expected_amount']
+    
+    load = await update.message.reply_text("🔍 ပြေစာအား AI ဖြင့် စစ်ဆေးနေသည်...")
+    res = await verify_receipt_with_ai(await f.download_as_bytearray(), expected)
+    
     if res.get('is_valid'):
         uid, btype = update.effective_user.id, context.user_data['buy_type']
         if btype.startswith("vip"):
             db_query("UPDATE users SET is_vip=? WHERE user_id=?", (1 if "basic" in btype else 2, uid))
         else:
             db_query("INSERT OR IGNORE INTO purchases VALUES (?,?)", (uid, int(btype.split("_")[1])))
-        await update.message.reply_text("✅ ဝယ်ယူမှု အောင်မြင်ပါသည်။")
-    else: await update.message.reply_text("❌ ပြေစာ မမှန်ပါ။")
+        await load.edit_text("✅ ဝယ်ယူမှု အောင်မြင်ပါသည်။ ဇာတ်ကားများကို စတင်ကြည့်ရှုနိုင်ပါပြီ။")
+    else: 
+        await load.edit_text("❌ ပြေစာ မမှန်ကန်ပါ။ (သို့မဟုတ်) ငွေပမာဏ မပြည့်မီပါ။ ကျေးဇူးပြု၍ ပြန်လည်စစ်ဆေးပေးပါ။")
+    
     return ConversationHandler.END
 
 # ==========================================
@@ -246,6 +280,8 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     threading.Thread(target=run_health_check, daemon=True).start()
+    
+    # Add JobQueue support
     app = Application.builder().token(BOT_TOKEN).defaults(Defaults(protect_content=True)).build()
 
     app.add_handler(ConversationHandler(
@@ -253,9 +289,15 @@ def main():
         states={ADD_MOVIE_STATE: [MessageHandler(filters.VIDEO, handle_movie_upload)]},
         fallbacks=[CommandHandler("start", start)]
     ))
+    
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(show_pay_info, pattern="^pay_")],
-        states={UPLOAD_RECEIPT: [MessageHandler(filters.PHOTO, confirm_receipt), CallbackQueryHandler(lambda u,c: ConversationHandler.END, pattern="^cancel_pay$")]},
+        states={
+            UPLOAD_RECEIPT: [
+                MessageHandler(filters.PHOTO, confirm_receipt), 
+                CallbackQueryHandler(lambda u,c: ConversationHandler.END, pattern="^cancel_pay$")
+            ]
+        },
         fallbacks=[CommandHandler("start", start)]
     ))
     
