@@ -34,7 +34,7 @@ matplotlib.use('Agg')
 # ==========================================
 # CONFIGURATION (ဒီနေရာမှာ အစ်ကို့ data တွေထည့်ပါ)
 # ==========================================
-BOT_TOKEN: Final = "8515688348:AAHg86mbsY60QAa8U-17xmQXM38o_ggDEM4" 
+BOT_TOKEN: Final = "8515688348:AAEFbdCJ6HHR6p4cCgzvUvcRDr7i7u-sL6U" 
 ADMIN_ID: Final = 6445257462              
 CHANNEL_ID: Final = "@ZanchannelMM"       
 DB_NAME: Final = "movie_database_pro.db"
