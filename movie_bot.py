@@ -175,15 +175,18 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month_rev = db_query("SELECT SUM(amount) FROM transactions WHERE status='SUCCESS' AND date LIKE ?", (f"{this_month}%",), fetchone=True)[0] or 0
 
     report_text = (
-        f"📅 **နေ့စဉ် စာရင်းချုပ် ({today})**\n"
+        f"📊 **Zan Movie Admin Dashboard**\n"
+        f"📅 Date: `{today}`\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"👑 VIP ဝင်သူ: `{vip_count}` ဦး\n"
-        f"🎬 ကားဝယ်သူ: `{movie_count}` ဦး\n"
-        f"👀 လာကြည့်ရုံ (Window Shoppers): `{window_shoppers}` ဦး\n"
-        f"⚠️ လိမ်လည်သူ (Scammers): `{scam_count}` ဦး\n"
+        f"👑 VIP Members Today: `{vip_count}`\n"
+        f"🎬 Movie Sales Today: `{movie_count}`\n"
+        f"👀 Window Shoppers: `{window_shoppers}`\n"
+        f"⚠️ Scammers Detected: `{scam_count}`\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **ဒီနေ့ဝင်ငွေ:** `{today_rev:,.0f} MMK`\n"
-        f"📅 **ဒီလဝင်ငွေ:** `{month_rev:,.0f} MMK`\n"
+        f"💰 Today Revenue: `{today_rev:,.0f} MMK`\n"
+        f"📅 Month Revenue: `{month_rev:,.0f} MMK`\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Status: Online"
     )
 
     graph_img = create_sales_graph()
@@ -406,12 +409,10 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     
-    # 1. Render Port Binding Fix
+    # Render Port Binding
     port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Starting Health Check Server on port {port}...")
     threading.Thread(target=run_health_check_server, daemon=True).start()
     
-    # 2. Asyncio Event Loop Fix (Very Important for RuntimeError)
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
@@ -442,8 +443,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     
     logger.info("🤖 Bot is starting polling...")
-    
-    # Run polling with drop_pending_updates to avoid conflict
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
