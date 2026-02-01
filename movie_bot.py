@@ -94,36 +94,9 @@ def db_query(query, args=(), fetchone=False, commit=True):
             return None
 
 # ==========================================
-# AI RECEIPT VERIFICATION
+# UI HELPER
 # ==========================================
-async def verify_receipt_with_ai(photo_bytes, expected_amount):
-    base64_image = base64.b64encode(photo_bytes).decode('utf-8')
-    prompt = f"Extract amount from this Burmese receipt. Return ONLY JSON: {{\"is_valid\": bool, \"amount\": num}}"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/png", "data": base64_image}}]}]}
-    try:
-        r = requests.post(url, json=payload, timeout=25)
-        return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'])
-    except: return {"is_valid": False, "amount": 0}
-
-# ==========================================
-# AUTO DELETE HANDLER
-# ==========================================
-async def delete_pay_message(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    try:
-        await context.bot.delete_message(chat_id=job.chat_id, message_id=job.data)
-    except Exception as e:
-        logger.error(f"Failed to delete pay message: {e}")
-
-# ==========================================
-# BOT HANDLERS
-# ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    today = datetime.now().strftime("%Y-%m-%d")
-    db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", (user.id, user.username, user.full_name, today))
-
+def get_start_info():
     text = (
         "🎬 **Zan Movie Channel Bot**\n\n"
         "**လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:**\n"
@@ -144,11 +117,64 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=CHANNEL_URL)],
         [InlineKeyboardButton("Back", callback_data="start_back")]
     ]
+    return text, InlineKeyboardMarkup(kb)
+
+# ==========================================
+# AUTO BACK HANDLER
+# ==========================================
+async def back_to_start_auto(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    try:
+        text, markup = get_start_info()
+        # Photo message ဖြစ်ဖြစ် Text message ဖြစ်ဖြစ် Start menu အဖြစ် ပြန်ပြောင်းပေးမည်
+        try:
+            # Photo caption ကို အရင်ပြင်ရန် ကြိုးစားသည်
+            await context.bot.edit_message_caption(
+                chat_id=job.chat_id,
+                message_id=job.data,
+                caption=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except:
+            # Photo မဟုတ်ပါက Text ကို ပြင်သည်
+            await context.bot.edit_message_text(
+                chat_id=job.chat_id,
+                message_id=job.data,
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+    except Exception as e:
+        logger.error(f"Failed to auto back to start: {e}")
+
+# ==========================================
+# AI RECEIPT VERIFICATION
+# ==========================================
+async def verify_receipt_with_ai(photo_bytes, expected_amount):
+    base64_image = base64.b64encode(photo_bytes).decode('utf-8')
+    prompt = f"Extract amount from this Burmese receipt. Return ONLY JSON: {{\"is_valid\": bool, \"amount\": num}}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/png", "data": base64_image}}]}]}
+    try:
+        r = requests.post(url, json=payload, timeout=25)
+        return json.loads(r.json()['candidates'][0]['content']['parts'][0]['text'])
+    except: return {"is_valid": False, "amount": 0}
+
+# ==========================================
+# BOT HANDLERS
+# ==========================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    today = datetime.now().strftime("%Y-%m-%d")
+    db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", (user.id, user.username, user.full_name, today))
+
+    text, markup = get_start_info()
     
     if update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await update.callback_query.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
 
 async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -183,7 +209,7 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ **အရေးကြီးသတိပေးချက်**\n"
             f"ငွေပေးချေရာတွင် ကျသင့်ငွေ **{expected} ကျပ်** ကို တစ်ကြိမ်တည်း အပြည့်လွှဲရပါမည်။ "
             "ခွဲလွှဲပါက ငွေပြန်အမ်းမည်မဟုတ်သလို ဇာတ်ကားလည်း ကြည့်ရှုခွင့်ရမည်မဟုတ်ပါ။\n\n"
-            "⏳ **၃ မိနစ်အတွင်း** ပြေစာ ပို့ပေးရပါမည်။ ၃ မိနစ်ပြည့်ပါက ဤ Message အလိုအလျောက် ပျက်သွားပါမည်။")
+            "⏳ **၃ မိနစ်အတွင်း** ပြေစာ ပို့ပေးရပါမည်။ ၃ မိနစ်ပြည့်ပါက Start Menu သို့ အလိုအလျောက် ပြန်သွားပါမည်။")
     
     kb = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_pay")]]
     
@@ -192,8 +218,8 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
     
-    # Schedule deletion after 180 seconds
-    context.job_queue.run_once(delete_pay_message, 180, chat_id=query.from_user.id, data=msg.message_id)
+    # ၃ မိနစ် (စက္ကန့် ၁၈၀) ပြည့်လျှင် Start Menu သို့ ပြန်သွားရန် Job သတ်မှတ်ခြင်း
+    context.job_queue.run_once(back_to_start_auto, 180, chat_id=query.from_user.id, data=msg.message_id)
     
     return UPLOAD_RECEIPT
 
@@ -264,7 +290,6 @@ def main():
     
     app = Application.builder().token(BOT_TOKEN).defaults(Defaults(protect_content=True)).build()
 
-    # Conversation for Payment
     pay_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(show_pay_info, pattern="^pay_")],
         states={
