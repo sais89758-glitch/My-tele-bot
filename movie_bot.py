@@ -43,7 +43,6 @@ PRICE_PRO: Final = 30000
 # Conversation States
 UPLOAD_RECEIPT = 1
 ADD_MOVIE_STATE = 2
-EDIT_PAY_STATE = 3
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -151,24 +150,24 @@ async def back_to_start_auto(context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    
     text = "🛠 **Admin Control Panel**\n\nဇာတ်ကားအသစ်တင်ရန် (သို့) ငွေလွှဲအချက်အလက်ပြင်ရန် ခလုတ်များကို နှိပ်ပါ။"
     kb = [
         [InlineKeyboardButton("➕ ဇာတ်ကားအသစ်တင်ရန်", callback_data="admin_add_movie")],
-        [InlineKeyboardButton("💳 ငွေလွှဲအချက်အလက်ပြင်ရန်", callback_data="admin_edit_pay")],
-        [InlineKeyboardButton("📊 အသုံးပြုသူစာရင်းကြည့်ရန်", callback_data="admin_stats")]
+        [InlineKeyboardButton("📊 အသုံးပြုသူစာရင်းကြည့်ရန်", callback_data="admin_stats")],
+        [InlineKeyboardButton("🏠 Home", callback_data="start_back")]
     ]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def admin_add_movie_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("🎬 **ဇာတ်ကား Video ကို Bot ဆီသို့ ပို့ပေးပါ။**\nCaption တွင် `ဇာတ်ကားအမည် | ဈေးနှုန်း` ဟု ရေးပေးပါ။\nဥပမာ- `Spiderman | 2000` ")
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("🎬 **ဇာတ်ကား Video ကို Bot ဆီသို့ ပို့ပေးပါ။**\n\nCaption တွင် `ဇာတ်ကားအမည် | ဈေးနှုန်း` ဟု ရေးပေးပါ။\nဥပမာ- `Spiderman | 2000` ")
     return ADD_MOVIE_STATE
 
 async def admin_save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.video or not update.message.caption:
         await update.message.reply_text("❌ ပုံစံမမှန်ပါ။ Video နှင့် Caption (Name | Price) တွဲပို့ပါ။")
         return ADD_MOVIE_STATE
-    
     try:
         title, price = update.message.caption.split("|")
         file_id = update.message.video.file_id
@@ -177,7 +176,6 @@ async def admin_save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ ဇာတ်ကားသိမ်းဆည်းပြီးပါပြီ။")
     except:
         await update.message.reply_text("❌ စာသားပုံစံမှားနေပါသည်။ (Name | Price) ဟု ရေးပါ။")
-    
     return ConversationHandler.END
 
 # ==========================================
@@ -200,18 +198,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     today = datetime.now().strftime("%Y-%m-%d")
     db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", (user.id, user.username, user.full_name, today))
-
     text, markup = get_start_info()
-    
     if update.callback_query:
+        await update.callback_query.answer()
         await update.callback_query.message.edit_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+    return ConversationHandler.END
 
 async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     d = query.data.split("_")
-    
     if d[1] == "vip":
         context.user_data['buy_type'] = f"vip_{d[2]}"
         context.user_data['expected_amount'] = PRICE_BASIC if d[2] == 'basic' else PRICE_PRO
@@ -220,7 +218,6 @@ async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
         movie = db_query("SELECT price FROM movies WHERE id=?", (m_id,), fetchone=True)
         context.user_data['buy_type'] = f"single_{m_id}"
         context.user_data['expected_amount'] = movie[0]
-    
     kb = [
         [InlineKeyboardButton("🟦 KBZPay", callback_data="pay_kpay"), InlineKeyboardButton("🟧 WavePay", callback_data="pay_wave")],
         [InlineKeyboardButton("🟥 AYA Pay", callback_data="pay_ayapay"), InlineKeyboardButton("🟦 CB Pay", callback_data="pay_cbpay")],
@@ -230,10 +227,10 @@ async def start_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     method = query.data.split("_")[-1]
     pay = db_query("SELECT phone, name, qr_file_id FROM payment_settings WHERE pay_type=?", (method,), fetchone=True)
     expected = context.user_data['expected_amount']
-    
     text = (f"💸 **{method.upper()} ဖြင့် ငွေပေးချေခြင်း**\n\n"
             f"💰 ကျသင့်ငွေ: **{expected} MMK**\n"
             f"📞 Phone: `{pay[0]}`\n"
@@ -242,14 +239,11 @@ async def show_pay_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"ငွေပေးချေရာတွင် ကျသင့်ငွေ **{expected} ကျပ်** ကို တစ်ကြိမ်တည်း အပြည့်လွှဲရပါမည်။ "
             "ခွဲလွှဲပါက ငွေပြန်အမ်းမည်မဟုတ်သလို ဇာတ်ကားလည်း ကြည့်ရှုခွင့်ရမည်မဟုတ်ပါ။\n\n"
             "⏳ **၃ မိနစ်အတွင်း** ပြေစာ ပို့ပေးရပါမည်။ ၃ မိနစ်ပြည့်ပါက Start Menu သို့ အလိုအလျောက် ပြန်သွားပါမည်။")
-    
-    kb = [[InlineKeyboardButton("❌ Cancel", callback_data="cancel_pay")]]
-    
+    kb = [[InlineKeyboardButton("❌ Cancel", callback_data="start_back")]]
     if pay[2]:
         msg = await context.bot.send_photo(chat_id=query.from_user.id, photo=pay[2], caption=text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
     else:
         msg = await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
-    
     context.job_queue.run_once(back_to_start_auto, 180, chat_id=query.from_user.id, data=msg.message_id)
     return UPLOAD_RECEIPT
 
@@ -257,10 +251,8 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo: return UPLOAD_RECEIPT
     f = await update.message.photo[-1].get_file()
     expected = context.user_data['expected_amount']
-    
     load = await update.message.reply_text("🔍 ပြေစာအား AI ဖြင့် စစ်ဆေးနေသည်...")
     res = await verify_receipt_with_ai(await f.download_as_bytearray(), expected)
-    
     if res.get('is_valid'):
         uid, btype = update.effective_user.id, context.user_data['buy_type']
         if btype.startswith("vip"):
@@ -270,39 +262,32 @@ async def confirm_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await load.edit_text("✅ ဝယ်ယူမှု အောင်မြင်ပါသည်။ ဇာတ်ကားများကို စတင်ကြည့်ရှုနိုင်ပါပြီ။")
     else: 
         await load.edit_text("❌ ပြေစာ မမှန်ကန်ပါ။ (သို့မဟုတ်) ငွေပမာဏ မပြည့်မီပါ။ ကျေးဇူးပြု၍ ပြန်လည်စစ်ဆေးပေးပါ။")
-    
     return ConversationHandler.END
 
-# ==========================================
-# MOVIE MENU & VIEWING
-# ==========================================
 async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     page = int(query.data.split("_")[-1])
     movies = db_query("SELECT id, title, price FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", ((page-1)*6,))
-    
     if not movies: return await query.answer("ဇာတ်ကားမရှိသေးပါ။", show_alert=True)
-    
     kb = [[InlineKeyboardButton(f"{m[1]} ({m[2]} Ks)", callback_data=f"view_{m[0]}")] for m in movies]
     nav = []
     if page > 1: nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"movie_menu_{page-1}"))
     if db_query("SELECT 1 FROM movies LIMIT 1 OFFSET ?", (page*6,)): nav.append(InlineKeyboardButton("➡️ Next", callback_data=f"movie_menu_{page+1}"))
     if nav: kb.append(nav)
     kb.append([InlineKeyboardButton("🏠 Home", callback_data="start_back")])
-    
     await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    return ConversationHandler.END
 
 async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     m_id = int(query.data.split("_")[-1])
     movie = db_query("SELECT * FROM movies WHERE id=?", (m_id,), fetchone=True)
     user_id = query.from_user.id
-    
     user_info = db_query("SELECT is_vip FROM users WHERE user_id=?", (user_id,), fetchone=True)
     is_vip = user_info[0] if user_info else 0
     has_purchased = db_query("SELECT 1 FROM purchases WHERE user_id=? AND movie_id=?", (user_id, m_id), fetchone=True)
-
     if is_vip >= 1 or has_purchased:
         await context.bot.send_video(chat_id=user_id, video=movie[1], caption=f"🎬 {movie[2]}", protect_content=True)
     else:
@@ -310,6 +295,7 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = [[InlineKeyboardButton(f"💸 ဝယ်မည် ({movie[3]} Ks)", callback_data=f"buy_single_{m_id}")],
               [InlineKeyboardButton("👑 VIP ဝင်မည်", callback_data="buy_vip_basic")]]
         await context.bot.send_video(chat_id=user_id, video=movie[1], caption=text, duration=180, protect_content=True, reply_markup=InlineKeyboardMarkup(kb))
+    return ConversationHandler.END
 
 # ==========================================
 # MAIN EXECUTION
@@ -317,30 +303,34 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     threading.Thread(target=run_health_check, daemon=True).start()
-    
     app = Application.builder().token(BOT_TOKEN).defaults(Defaults(protect_content=True)).build()
 
     # Conversation for Payment & Admin
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(show_pay_info, pattern="^pay_"),
-            CallbackQueryHandler(admin_add_movie_start, pattern="^admin_add_movie")
+            CallbackQueryHandler(admin_add_movie_start, pattern="^admin_add_movie"),
+            CallbackQueryHandler(start, pattern="^start_back$"),
+            CallbackQueryHandler(movie_menu, pattern="^movie_menu_"),
+            CallbackQueryHandler(view_details, pattern="^view_")
         ],
         states={
             UPLOAD_RECEIPT: [
                 MessageHandler(filters.PHOTO, confirm_receipt), 
-                CallbackQueryHandler(lambda u,c: ConversationHandler.END, pattern="^cancel_pay$")
+                CallbackQueryHandler(start, pattern="^start_back$")
             ],
             ADD_MOVIE_STATE: [
-                MessageHandler(filters.VIDEO, admin_save_movie)
+                MessageHandler(filters.VIDEO, admin_save_movie),
+                CallbackQueryHandler(start, pattern="^start_back$")
             ]
         },
-        fallbacks=[CommandHandler("start", start)]
+        fallbacks=[CommandHandler("start", start)],
+        allow_reentry=True
     )
 
     app.add_handler(conv_handler)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("saizawyelwin", admin_panel)) # ဒီမှာ Command ထည့်ထားပါတယ်
+    app.add_handler(CommandHandler("saizawyelwin", admin_panel))
     app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
     app.add_handler(CallbackQueryHandler(start_purchase, pattern="^buy_"))
     app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
