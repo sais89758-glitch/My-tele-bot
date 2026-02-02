@@ -7,6 +7,7 @@ import base64
 import httpx
 import json
 import anyio
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 from typing import Final
 
@@ -48,6 +49,22 @@ RECEIPT_WAITING = 2
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 db_lock = threading.Lock()
+
+# ==========================================
+# KEEP ALIVE SERVER (Auto Sleep မဖြစ်အောင်)
+# ==========================================
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running live!")
+
+def start_server():
+    # Render က ပေးတဲ့ PORT သို့မဟုတ် 8080 ကို သုံးပါမည်
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    print(f"Keep-alive server running on port {port}")
+    server.serve_forever()
 
 # ==========================================
 # DATABASE
@@ -118,6 +135,10 @@ async def analyze_receipt(base64_image, expected_amount):
 # BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Callback Query မှလာလျှင် answer လုပ်ပေးရမည်
+    if update.callback_query:
+        await update.callback_query.answer()
+        
     text = (
         "🎬 **Zan Movie Bot မှ ကြိုဆိုပါတယ်**\n\n"
         "⚠️ **စည်းကမ်းချက်များ**\n"
@@ -130,7 +151,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👑 Basic VIP (10000 Ks)", callback_data="buy_vip_basic")],
         [InlineKeyboardButton("🎬 ဇာတ်ကား Menu", callback_data="movie_menu_1")]
     ]
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def handle_buy_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -151,8 +176,34 @@ async def handle_buy_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Note (မှတ်ချက်) နေရာတွင် **စာလုံးဝမရေးပါနှင့်**။ ရေးမိပါက AI မှ ပယ်ချမည်ဖြစ်ပြီး ဇာတ်ကားကြည့်ခွင့်ရမည်မဟုတ်ပါ။\n\n"
         "ငွေလွှဲပြီးပါက ပြေစာ (Screenshot) ပို့ပေးပါ။"
     )
-    await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    kb = [[InlineKeyboardButton("🔙 Back", callback_data="start_back")]]
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
     return RECEIPT_WAITING
+
+async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        page = int(query.data.split("_")[-1])
+    except:
+        page = 1
+        
+    movies = db_query("SELECT id, title, price, channel_post_id FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?", ((page-1)*6,))
+    
+    if not movies:
+        await query.message.edit_text("🎬 **လက်ရှိတွင် ဇာတ်ကားများ မရှိသေးပါ**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="start_back")]]), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    kb = [[InlineKeyboardButton(f"🎬 {m[1]} ({m[2]} Ks)", url=f"https://t.me/{CHANNEL_ID.replace('@','')}/{m[3]}")] for m in movies]
+    
+    nav = []
+    if page > 1: nav.append(InlineKeyboardButton("⬅️ ရှေ့သို့", callback_data=f"movie_menu_{page-1}"))
+    next_check = db_query("SELECT 1 FROM movies LIMIT 1 OFFSET ?", (page*6,))
+    if next_check: nav.append(InlineKeyboardButton("နောက်သို့ ➡️", callback_data=f"movie_menu_{page+1}"))
+    
+    if nav: kb.append(nav)
+    kb.append([InlineKeyboardButton("🏠 Home", callback_data="start_back")])
+    await query.message.edit_text("🎬 **ဇာတ်ကားစာရင်း**\n(Channel သို့ရောက်သွားပါမည်)", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def process_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
@@ -241,7 +292,7 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_caption(caption=query.message.caption + "\n\n🔴 **ပယ်ချပြီး**")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("လုပ်ဆောင်ချက်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။")
+    await update.message.reply_text("လုပ်ဆောင်ချက်ကို ရပ်ဆိုင်းလိုက်ပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="start_back")]]))
     return ConversationHandler.END
 
 # ==========================================
@@ -249,6 +300,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def main():
     init_db()
+    
+    # Auto-Sleep ကာကွယ်ရန် Server ကို Thread ခွဲပြီး run ပါမည်
+    threading.Thread(target=start_server, daemon=True).start()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     buy_conv = ConversationHandler(
@@ -256,14 +311,24 @@ def main():
         states={
             RECEIPT_WAITING: [MessageHandler(filters.PHOTO, process_receipt)]
         },
-        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)]
+        fallbacks=[
+            CommandHandler("cancel", cancel), 
+            CommandHandler("start", start),
+            CallbackQueryHandler(start, pattern="^start_back$") # Cancel within conversation
+        ]
     )
     
     app.add_handler(buy_conv)
     app.add_handler(CommandHandler("start", start))
+    
+    # Navigation handlers (Menu & Back buttons)
+    app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
+    
+    # Admin actions
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(appr|reje)_"))
     
-    print("Bot is starting with AI and Hardcoded Tokens...")
+    print("Bot is starting with Keep-Alive Server...")
     app.run_polling()
 
 if __name__ == "__main__":
