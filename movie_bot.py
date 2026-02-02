@@ -28,9 +28,8 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # ==========================================
-# CONFIGURATION (တိုက်ရိုက်ထည့်သွင်းထားသည်)
+# CONFIGURATION
 # ==========================================
-# Render မှာ Environment Variable လိုက်ပြင်စရာမလိုအောင် ဤနေရာတွင် တိုက်ရိုက်ထည့်ထားသည်
 BOT_TOKEN: Final = "8515688348:AAEFbdCJ6HHR6p4cCgzvUvcRDr7i7u-sL6U"
 GOOGLE_API_KEY: Final = "AIzaSyA5y7nWKVSHSALeKSrG1fiTBTB0hdWUZtk"
 
@@ -51,7 +50,7 @@ logger = logging.getLogger(__name__)
 db_lock = threading.Lock()
 
 # ==========================================
-# KEEP ALIVE SERVER (Auto Sleep မဖြစ်အောင်)
+# KEEP ALIVE SERVER
 # ==========================================
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -60,7 +59,6 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is running live!")
 
 def start_server():
-    # Render က ပေးတဲ့ PORT သို့မဟုတ် 8080 ကို သုံးပါမည်
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     print(f"Keep-alive server running on port {port}")
@@ -94,10 +92,102 @@ def init_db():
         db_query("INSERT OR IGNORE INTO payment_settings (pay_type, phone, name) VALUES (?,?,?)", p)
 
 # ==========================================
-# AI RECEIPT CHECKER (GEMINI API)
+# ADMIN: MOVIE UPLOAD & PANEL (RESTORED)
+# ==========================================
+async def start_add_movie_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+        if update.effective_user.id != ADMIN_ID:
+            return ConversationHandler.END
+        await query.message.reply_text("🎬 **Video ဖိုင်ကို အရင်ပို့ပါ**\n\nပြီးလျှင် Caption တွင်:\n`#1000` (ဈေးနှုန်း)\n`ဇာတ်ကားအမည်`\nဟု ရေးသားပေးပို့ပါ။")
+    return ADD_MOVIE_STATE
+
+async def admin_save_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
+    if not update.message.video or not update.message.caption:
+        await update.message.reply_text("❌ Video နှင့် Caption ကို ပုံစံတကျ တွဲပို့ပါ။")
+        return ADD_MOVIE_STATE
+
+    try:
+        lines = update.message.caption.strip().split("\n")
+        price_match = re.search(r'#(\d+)', lines[0])
+        
+        if not price_match or len(lines) < 2:
+            raise ValueError("Format Error")
+            
+        price = int(price_match.group(1))
+        title = lines[1].strip()
+        file_id = update.message.video.file_id
+        
+        bot_username = (await context.bot.get_me()).username
+        kb = [[InlineKeyboardButton("💳 ဝယ်ယူရန်", url=f"https://t.me/{bot_username}?start=buy_{title.replace(' ', '_')}")] ]
+        post_text = f"🎬 **ဇာတ်ကားအသစ် တင်လိုက်ပါပြီ**\n\n📝 အမည်: **{title}**\n💰 ဈေးနှုန်း: **{price} MMK**\n\n⚠️ နမူနာ ၃ မိနစ်သာ ကြည့်နိုင်ပါသည်။ အပြည့်အစုံကြည့်ရန် ဝယ်ယူပါ။"
+        
+        channel_msg = await context.bot.send_video(
+            chat_id=CHANNEL_ID, 
+            video=file_id, 
+            caption=post_text, 
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode=ParseMode.MARKDOWN,
+            protect_content=True 
+        )
+        
+        db_query("INSERT INTO movies (file_id, title, price, added_date, channel_post_id) VALUES (?,?,?,?,?)", 
+                 (file_id, title, price, datetime.now(), channel_msg.message_id))
+        
+        await update.message.reply_text(f"✅ **{title}** ကို Update လုပ်ပြီးပါပြီ။")
+    except Exception as e:
+        logger.error(e)
+        await update.message.reply_text("❌ ပုံစံမှားနေပါသည်။\n\n`#1000` (ပထမစာကြောင်း)\n`ကားအမည်` (ဒုတိယစာကြောင်း)\nVideo Caption တွင် ထည့်ရေးပါ။")
+        return ADD_MOVIE_STATE
+    
+    return ConversationHandler.END
+
+def generate_line_graph(daily_data):
+    if not daily_data: return "No data."
+    max_val = max([d[1] for d in daily_data]) if any(d[1] > 0 for d in daily_data) else 1
+    graph = "📊 **နေ့စဉ်ဝင်ငွေပြဇယား**\n"
+    for date, amt in daily_data:
+        bar_len = int((amt/max_val)*10)
+        bar = "▇" * bar_len if amt > 0 else ""
+        graph += f"`{date[-5:]}: {amt:>6} Ks` {bar}\n"
+    return graph
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    now = datetime.now()
+    this_month = now.strftime("%Y-%m")
+    
+    daily_stats = []
+    for i in range(6, -1, -1):
+        day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        res = db_query("SELECT SUM(amount) FROM transactions WHERE date=? AND is_approved=1", (day,), fetchone=True)
+        amt = res[0] if res and res[0] else 0
+        daily_stats.append((day, amt))
+    
+    res_month = db_query("SELECT SUM(amount) FROM transactions WHERE date LIKE ? AND is_approved=1", (f"{this_month}%",), fetchone=True)
+    monthly_rev = res_month[0] if res_month and res_month[0] else 0
+    
+    graph_text = generate_line_graph(daily_stats)
+    
+    text = (
+        f"📊 **Zan Admin Dashboard ({now.strftime('%B')})**\n\n"
+        f"💰 **ယခုလဝင်ငွေ: {monthly_rev} MMK**\n"
+        f"_(လကုန်ပါက စာရင်းအသစ် အလိုအလျောက် ပြန်စပါမည်)_\n\n"
+        f"{graph_text}"
+    )
+    kb = [[InlineKeyboardButton("➕ ဇာတ်ကားသစ်တင်ရန်", callback_data="admin_add_movie")], [InlineKeyboardButton("🏠 Home", callback_data="start_back")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+
+async def cancel_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ လုပ်ဆောင်ချက်ကို ပယ်ဖျက်လိုက်ပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="start_back")]]))
+    return ConversationHandler.END
+
+# ==========================================
+# AI RECEIPT CHECKER
 # ==========================================
 async def analyze_receipt(base64_image, expected_amount):
-    """Gemini API ကို သုံး၍ ပြေစာ စစ်ဆေးခြင်း"""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={GOOGLE_API_KEY}"
     
     prompt = (
@@ -135,26 +225,36 @@ async def analyze_receipt(base64_image, expected_amount):
 # BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Callback Query မှလာလျှင် answer လုပ်ပေးရမည်
     if update.callback_query:
         await update.callback_query.answer()
         
     text = (
-        "🎬 **Zan Movie Bot မှ ကြိုဆိုပါတယ်**\n\n"
-        "⚠️ **စည်းကမ်းချက်များ**\n"
-        "- ငွေလွှဲရာတွင် Note တွင် ဘာမှမရေးပါနှင့်။\n"
-        "- Channel/ဇာတ်ကား အမည်များ ရေးမိပါက ငွေပြန်အမ်းမည်မဟုတ်ပါ။\n"
-        "- AI မှ အလိုအလျောက် စစ်ဆေးပယ်ချပါလိမ့်မည်။"
+        "🎬 **Zan Movie Channel Bot**\n\n"
+        "လုံခြုံရေးနှင့် စည်းကမ်းချက်များ:\n"
+        "⛔️ ဇာတ်ကားများကို SS ရိုက်ခြင်း၊ Video Record ဖမ်းခြင်း၊ ဖုန်းထဲသို့ Save လုပ်ခြင်း နှင့် Forward လုပ်ခြင်းများ လုံးဝမရပါ။\n"
+        "✅ တစ်ကားချင်း ဝယ်ယူထားသော ဇာတ်ကားများကို ဤ Channel အတွင်း ရာသက်ပန် ပြန်ကြည့်နိုင်ပါသည်။\n\n"
+        "👑 **VIP အစီအစဉ်များ**\n"
+        "1️⃣ **Basic VIP (10000 Ks) - 1 Month Access**\n"
+        "   - တစ်လအတွင်း တင်သမျှကားများကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n"
+        "2️⃣ **Pro VIP (30000 Ks) - Lifetime Access**\n"
+        "   - Channel တွင် တင်သမျှ ကားဟောင်း/အသစ် အားလုံးကို ရာသက်ပန် ကြည့်ရှုခွင့်ရပါမည်။\n\n"
+        "💡 ဘာမှမဝယ်ထားပါက နမူနာ ၃ မိနစ်သာ ကြည့်ရှုခွင့်ရပါမည်။"
     )
     kb = [
-        [InlineKeyboardButton("👑 Pro VIP (30000 Ks)", callback_data="buy_vip_pro")],
         [InlineKeyboardButton("👑 Basic VIP (10000 Ks)", callback_data="buy_vip_basic")],
-        [InlineKeyboardButton("🎬 ဇာတ်ကား Menu", callback_data="movie_menu_1")]
+        [InlineKeyboardButton("👑 Pro VIP (30000 Ks)", callback_data="buy_vip_pro")],
+        [InlineKeyboardButton("🎬 ဇာတ်ကားမီနူး", callback_data="movie_menu_1")],
+        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=f"https://t.me/{CHANNEL_ID.replace('@','')}")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="start_back")]
     ]
     
     if update.callback_query:
         await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
     else:
+        # Register user in DB
+        user = update.effective_user
+        db_query("INSERT OR IGNORE INTO users (user_id, username, full_name, joined_date) VALUES (?,?,?,?)", 
+                 (user.id, user.username, user.full_name, datetime.now()))
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def handle_buy_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -173,7 +273,7 @@ async def handle_buy_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📱 KBZ Pay: `09960202983`\n"
         f"👤 အမည်: **Sai Zaw Ye Lwin**\n\n"
         f"⛔️ **သတိပြုရန်**\n"
-        "Note (မှတ်ချက်) နေရာတွင် **စာလုံးဝမရေးပါနှင့်**။ ရေးမိပါက AI မှ ပယ်ချမည်ဖြစ်ပြီး ဇာတ်ကားကြည့်ခွင့်ရမည်မဟုတ်ပါ။\n\n"
+        "Note (မှတ်ချက်) နေရာတွင် **Channelနှင့်ပတ်သတ်သောစာလုံး(လုံးဝ)မရေးပါနှင့်**။ ရေးမိပါက AI မှ ပယ်ချမည်ဖြစ်ပြီး ဇာတ်ကားကြည့်ခွင့်ရမည်မဟုတ်ပါ။\n\n"
         "ငွေလွှဲပြီးပါက ပြေစာ (Screenshot) ပို့ပေးပါ။"
     )
     kb = [[InlineKeyboardButton("🔙 Back", callback_data="start_back")]]
@@ -301,11 +401,22 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
     
-    # Auto-Sleep ကာကွယ်ရန် Server ကို Thread ခွဲပြီး run ပါမည်
+    # Auto-Sleep ကာကွယ်ရန် Server
     threading.Thread(target=start_server, daemon=True).start()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # 1. Admin Conversation Handler (Movie Upload)
+    admin_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_add_movie_flow, pattern="^admin_add_movie$")],
+        states={
+            ADD_MOVIE_STATE: [MessageHandler(filters.VIDEO, admin_save_movie)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_upload), CommandHandler("start", start)],
+    )
+    app.add_handler(admin_conv)
+
+    # 2. User Conversation Handler (Buy VIP)
     buy_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(handle_buy_action, pattern="^buy_vip_")],
         states={
@@ -314,21 +425,21 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel), 
             CommandHandler("start", start),
-            CallbackQueryHandler(start, pattern="^start_back$") # Cancel within conversation
+            CallbackQueryHandler(start, pattern="^start_back$")
         ]
     )
-    
     app.add_handler(buy_conv)
-    app.add_handler(CommandHandler("start", start))
     
-    # Navigation handlers (Menu & Back buttons)
+    # 3. Standard Commands
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("saizawyelwin", admin_panel)) # Restored Admin Command
+    
+    # 4. Callback Handlers
     app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movie_menu_"))
     app.add_handler(CallbackQueryHandler(start, pattern="^start_back$"))
-    
-    # Admin actions
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(appr|reje)_"))
     
-    print("Bot is starting with Keep-Alive Server...")
+    print("Bot is starting (All Features Restored)...")
     app.run_polling()
 
 if __name__ == "__main__":
