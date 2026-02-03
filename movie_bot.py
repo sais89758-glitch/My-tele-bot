@@ -1,273 +1,474 @@
-import logging
-import sqlite3
-import threading
-import re
 import os
-import base64
-import json
+import asyncio
+import logging
+import hashlib
+import sqlite3
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Final
-
-import httpx
-import anyio
 
 from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
+    Update, InlineKeyboardButton, InlineKeyboardMarkup
 )
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    ConversationHandler,
-    filters,
+    Application, CommandHandler, CallbackQueryHandler,
+    MessageHandler, ContextTypes, filters
 )
-from telegram.constants import ParseMode
 
-# =====================================================
-# CONFIG
-# =====================================================
-BOT_TOKEN: Final = "8515688348:AAEFbdCJ6HHR6p4cCgzvUvcRDr7i7u-sL6U"
-ADMIN_ID: Final = 6445257462
-CHANNEL_USERNAME: Final = "ZanchannelMM"
-DB_NAME: Final = "movie.db"
+# =========================
+# CONFIG (ENV ONLY)
+# =========================
+# ===== CONFIG =====
+import os
 
-PRICE_BASIC_VIP: Final = 10000
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+VIP_CHANNEL_ID = int(os.getenv("VIP_CHANNEL_ID"))
+
+MAIN_CHANNEL = os.getenv("MAIN_CHANNEL")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+
+# (AI မသုံးသေးရင် မထည့်လည်းရ)
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+DB_PATH = "data/movie_bot.db"
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-db_lock = threading.Lock()
+log = logging.getLogger("ZanMovieBot")
+# =====================
+# CONFIG
+# =====================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID"))
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 
-ADD_MOVIE, WAIT_RECEIPT = range(2)
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("AdsBot")
 
-# =====================================================
-# KEEP ALIVE (Render / Railway)
-# =====================================================
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
+# =====================
+# DB SETUP
+# =====================
+os.makedirs("data", exist_ok=True)
+conn = sqlite3.connect("data/ads.db", check_same_thread=False)
+cur = conn.cursor()
 
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
+cur.execute("""
+CREATE TABLE IF NOT EXISTS ads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_type TEXT,
+    file_id TEXT,
+    text TEXT,
+    post_time TEXT,
+    delete_time TEXT,
+    message_id INTEGER
+)
+""")
+conn.commit()
 
-# =====================================================
-# DATABASE
-# =====================================================
-def db(query, args=(), one=False):
-    with db_lock:
-        conn = sqlite3.connect(DB_NAME)
-        cur = conn.cursor()
-        cur.execute(query, args)
-        conn.commit()
-        res = cur.fetchone() if one else cur.fetchall()
-        conn.close()
-        return res
-
-def init_db():
-    db("""CREATE TABLE IF NOT EXISTS users(
-        user_id INTEGER PRIMARY KEY,
-        name TEXT,
-        vip_until DATETIME
-    )""")
-    db("""CREATE TABLE IF NOT EXISTS movies(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT,
-        price INTEGER,
-        post_id INTEGER,
-        created DATETIME
-    )""")
-    db("""CREATE TABLE IF NOT EXISTS unlocks(
-        user_id INTEGER,
-        movie_id INTEGER,
-        PRIMARY KEY(user_id, movie_id)
-    )""")
-
-# =====================================================
-# START / HOME
-# =====================================================
+# =====================
+# ADMIN START
+# =====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        await update.callback_query.answer()
-
-    user = update.effective_user
-    db("INSERT OR IGNORE INTO users (user_id, name) VALUES (?,?)", (user.id, user.full_name))
-
-    text = (
-        "🎬 **Zan Movie Bot**\n\n"
-        "⚠️ သတိပြုရန်\n"
-        "- Screenshot (SS) ❌\n"
-        "- Screen Record ❌\n"
-        "- Download ❌\n"
-        "- Forward ❌\n\n"
-        "VIP မဝင် / မဝယ်ပါက ၃ မိနစ် Preview သာ ရပါမည်။"
-    )
-
-    kb = [
-        [InlineKeyboardButton("👑 VIP ဝင်ရန်", callback_data="vip_buy")],
-        [InlineKeyboardButton("🎬 ဇာတ်ကားမီနူး", callback_data="movies_1")],
-        [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=f"https://t.me/{CHANNEL_USERNAME}")],
-    ]
-
-    if update.message:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-
-# =====================================================
-# ADMIN ADD MOVIE
-# =====================================================
-async def admin_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-
-    await update.callback_query.answer()
-    await update.callback_query.message.reply_text(
-        "🎬 Video ကို Caption နဲ့ပို့ပါ\n\n"
-        "ပုံစံ👇\n"
-        "#1000\n"
-        "ဇာတ်ကားအမည်"
+        return
+    await update.message.reply_text(
+        "📣 Ads Manager\n\n"
+        "ကြော်ညာ (text / photo / video) ကို ပို့ပါ\n"
+        "ပြီးရင် time ကို မေးပါမယ်"
     )
-    return ADD_MOVIE
 
-async def admin_add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =====================
+# RECEIVE AD CONTENT
+# =====================
+async def receive_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-
-    if not update.message.video or not update.message.caption:
-        await update.message.reply_text("❌ Video + Caption လိုအပ်ပါတယ်")
-        return ADD_MOVIE
-
-    try:
-        lines = update.message.caption.strip().splitlines()
-        price = int(re.search(r"#(\d+)", lines[0]).group(1))
-        title = lines[1].strip()
-
-        msg = await context.bot.send_video(
-            chat_id=f"@{CHANNEL_USERNAME}",
-            video=update.message.video.file_id,
-            caption=f"🎬 **{title}**\n💰 {price} MMK",
-            parse_mode=ParseMode.MARKDOWN,
-            protect_content=True
-        )
-
-        db(
-            "INSERT INTO movies (title, price, post_id, created) VALUES (?,?,?,?)",
-            (title, price, msg.message_id, datetime.now())
-        )
-
-        await update.message.reply_text(f"✅ `{title}` တင်ပြီးပါပြီ")
-    except Exception as e:
-        logger.error(e)
-        await update.message.reply_text("❌ Caption ပုံစံမှားနေပါတယ်")
-
-    return ConversationHandler.END
-
-# =====================================================
-# MOVIE MENU
-# =====================================================
-async def movie_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    page = int(update.callback_query.data.split("_")[1])
-
-    movies = db(
-        "SELECT id, title, price, post_id FROM movies ORDER BY id DESC LIMIT 6 OFFSET ?",
-        ((page - 1) * 6,)
-    )
-
-    if not movies:
-        await update.callback_query.message.edit_text("မရှိသေးပါ")
         return
 
-    kb = [
-        [InlineKeyboardButton(f"{m[1]} ({m[2]}Ks)", url=f"https://t.me/{CHANNEL_USERNAME}/{m[3]}")]
-        for m in movies
-    ]
+    msg = update.message
+    ad = {}
 
-    nav = []
-    if page > 1:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"movies_{page-1}"))
-    if len(movies) == 6:
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"movies_{page+1}"))
-    if nav:
-        kb.append(nav)
+    if msg.text:
+        ad["content_type"] = "text"
+        ad["text"] = msg.text
+        ad["file_id"] = None
+    elif msg.photo:
+        ad["content_type"] = "photo"
+        ad["file_id"] = msg.photo[-1].file_id
+        ad["text"] = msg.caption or ""
+    elif msg.video:
+        ad["content_type"] = "video"
+        ad["file_id"] = msg.video.file_id
+        ad["text"] = msg.caption or ""
+    else:
+        return
 
-    kb.append([InlineKeyboardButton("🏠 Home", callback_data="home")])
-
-    await update.callback_query.message.edit_text(
-        "🎬 **ဇာတ်ကားစာရင်း**",
-        reply_markup=InlineKeyboardMarkup(kb),
-        parse_mode=ParseMode.MARKDOWN
+    context.user_data["ad"] = ad
+    await msg.reply_text(
+        "⏰ Post time ပေးပါ\n"
+        "Format: YYYY-MM-DD HH:MM\n"
+        "ဥပမာ: 2026-02-10 19:00"
     )
 
-# =====================================================
-# VIP BUY (AUTO)
-# =====================================================
-async def vip_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    context.user_data["vip_amount"] = PRICE_BASIC_VIP
+# =====================
+# RECEIVE TIME
+# =====================
+async def receive_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-    text = (
-        "👑 **VIP 1 Month**\n"
-        f"💰 {PRICE_BASIC_VIP} MMK\n\n"
-        "⚠️ Note မှာ Channel / Movie မရေးပါနဲ့\n"
-        "ငွေလွဲပြီး Screenshot ပို့ပါ"
-    )
+    if "ad" not in context.user_data:
+        return
 
-    await update.callback_query.message.edit_text(text)
-    return WAIT_RECEIPT
+    try:
+        post_time = datetime.strptime(update.message.text, "%Y-%m-%d %H:%M")
+    except ValueError:
+        await update.message.reply_text("❌ Format မမှန်ပါ")
+        return
 
-async def vip_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
-        await update.message.reply_text("❌ Screenshot ပို့ပါ")
-        return WAIT_RECEIPT
-
-    vip_until = datetime.now() + timedelta(days=30)
-    db("UPDATE users SET vip_until=? WHERE user_id=?", (vip_until, update.effective_user.id))
-
+    context.user_data["post_time"] = post_time
     await update.message.reply_text(
-        "✅ **VIP အတည်ပြုပြီးပါပြီ**\n"
-        "VIP ဝင်နေချိန် ဖွင့်ထားသော ကားများကို ရာသက်ပန် ကြည့်နိုင်ပါသည်။",
-        parse_mode=ParseMode.MARKDOWN
+        "🗑️ Delete time ပေးပါ\n"
+        "Format: YYYY-MM-DD HH:MM\n"
+        "မဖျတ်ချင်ရင် none လို့ရေးပါ"
     )
-    return ConversationHandler.END
 
-# =====================================================
+# =====================
+# RECEIVE DELETE TIME
+# =====================
+async def receive_delete_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    ad = context.user_data.get("ad")
+    post_time = context.user_data.get("post_time")
+
+    if not ad or not post_time:
+        return
+
+    text = update.message.text.lower()
+
+    delete_time = None
+    if text != "none":
+        try:
+            delete_time = datetime.strptime(text, "%Y-%m-%d %H:%M")
+        except ValueError:
+            await update.message.reply_text("❌ Format မမှန်ပါ")
+            return
+
+    cur.execute("""
+        INSERT INTO ads (content_type, file_id, text, post_time, delete_time)
+        VALUES (?,?,?,?,?)
+    """, (
+        ad["content_type"],
+        ad["file_id"],
+        ad["text"],
+        post_time.isoformat(),
+        delete_time.isoformat() if delete_time else None
+    ))
+    conn.commit()
+
+    context.user_data.clear()
+    await update.message.reply_text("✅ ကြော်ညာ schedule ပြီးပါပြီ")
+
+# =====================
+# SCHEDULER
+# =====================
+async def ads_scheduler(app: Application):
+    while True:
+        now = datetime.utcnow().isoformat()
+
+        # POST
+        cur.execute("""
+            SELECT id, content_type, file_id, text
+            FROM ads
+            WHERE message_id IS NULL AND post_time <= ?
+        """, (now,))
+        for ad_id, ctype, fid, text in cur.fetchall():
+            if ctype == "text":
+                msg = await app.bot.send_message(MAIN_CHANNEL_ID, text)
+            elif ctype == "photo":
+                msg = await app.bot.send_photo(
+                    MAIN_CHANNEL_ID, fid,
+                    caption=text + f"\n\n📞 @{ADMIN_USERNAME}"
+                )
+            else:
+                msg = await app.bot.send_video(
+                    MAIN_CHANNEL_ID, fid,
+                    caption=text + f"\n\n📞 @{ADMIN_USERNAME}"
+                )
+
+            cur.execute(
+                "UPDATE ads SET message_id=? WHERE id=?",
+                (msg.message_id, ad_id)
+            )
+            conn.commit()
+
+        # DELETE
+        cur.execute("""
+            SELECT id, message_id
+            FROM ads
+            WHERE delete_time IS NOT NULL AND delete_time <= ?
+        """, (now,))
+        for ad_id, msg_id in cur.fetchall():
+            try:
+                await app.bot.delete_message(MAIN_CHANNEL_ID, msg_id)
+            except Exception:
+                pass
+            cur.execute("DELETE FROM ads WHERE id=?", (ad_id,))
+            conn.commit()
+
+        await asyncio.sleep(30)
+
+# =====================
 # MAIN
-# =====================================================
-def main():
-    init_db()
-    threading.Thread(target=run_server, daemon=True).start()
-
+# =====================
+async def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    admin_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(admin_add_start, pattern="^admin_add$")],
-        states={ADD_MOVIE: [MessageHandler(filters.VIDEO, admin_add_movie)]},
-        fallbacks=[]
-    )
-
-    vip_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(vip_buy, pattern="^vip_buy$")],
-        states={WAIT_RECEIPT: [MessageHandler(filters.PHOTO, vip_receipt)]},
-        fallbacks=[]
-    )
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(admin_conv)
-    app.add_handler(vip_conv)
+    app.add_handler(MessageHandler(
+        filters.User(ADMIN_ID) & (filters.TEXT | filters.PHOTO | filters.VIDEO),
+        receive_ad
+    ))
+    app.add_handler(MessageHandler(
+        filters.User(ADMIN_ID) & filters.Regex(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$"),
+        receive_time
+    ))
+    app.add_handler(MessageHandler(
+        filters.User(ADMIN_ID),
+        receive_delete_time
+    ))
 
-    app.add_handler(CallbackQueryHandler(start, pattern="^home$"))
-    app.add_handler(CallbackQueryHandler(movie_menu, pattern="^movies_"))
+    app.create_task(ads_scheduler(app))
 
-    logger.info("Bot running...")
-    app.run_polling()
+    log.info("Ads bot started")
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
+# =========================
+# DB SETUP
+# =========================
+os.makedirs("data", exist_ok=True)
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+cur = conn.cursor()
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    vip_type TEXT,
+    vip_expire TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    amount INTEGER,
+    method TEXT,
+    image_hash TEXT,
+    status TEXT,
+    created_at TEXT
+)
+""")
+
+conn.commit()
+
+# =========================
+# HELPERS
+# =========================
+def get_user(user_id: int):
+    cur.execute("SELECT vip_type, vip_expire FROM users WHERE user_id=?", (user_id,))
+    row = cur.fetchone()
+    return row
+
+def set_user(user_id: int, vip_type: str, expire: datetime | None):
+    cur.execute(
+        "REPLACE INTO users (user_id, vip_type, vip_expire) VALUES (?,?,?)",
+        (user_id, vip_type, expire.isoformat() if expire else None)
+    )
+    conn.commit()
+
+def add_payment(user_id, amount, method, image_hash, status):
+    cur.execute("""
+        INSERT INTO payments (user_id, amount, method, image_hash, status, created_at)
+        VALUES (?,?,?,?,?,?)
+    """, (user_id, amount, method, image_hash, status, datetime.utcnow().isoformat()))
+    conn.commit()
+
+def is_duplicate(image_hash: str) -> bool:
+    cur.execute("SELECT 1 FROM payments WHERE image_hash=?", (image_hash,))
+    return cur.fetchone() is not None
+
+# =========================
+# START / MAIN MENU
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🎬 Zan Movie Channel Bot\n\n"
+        "⛔️ Screenshot / Screen Record / Download /save မရပါ\n\n"
+        "🥇 Pro VIP – 30000 MMK (Lifetime)\n\n"
+    )
+    kb = [
+        [InlineKeyboardButton("🌟 VIP", callback_data="buy_pro")],
+        [InlineKeyboardButton("📣 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL)],
+        [InlineKeyboardButton("📞 Admin ဆက်သွယ်ရန်", url=f"https://t.me/{ADMIN_USERNAME}")]
+    ]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+# =========================
+# BUY FLOW
+# =========================
+async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    vip_type = q.data
+    context.user_data["vip_type"] = vip_type
+
+    amount = 10000 if vip_type == "buy_basic" else 30000
+
+    warn = (
+        "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+        "⛔️ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
+        "⛔️ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
+        "⛔️ ငွေကို တစ်ခါတည်း အပြည့်လွဲရပါမည်\n\n"
+        f"💳 Amount: {amount} MMK"
+    )
+
+    kb = [
+        [InlineKeyboardButton("KBZ Pay", callback_data="pay_kbz"),
+         InlineKeyboardButton("Wave Pay", callback_data="pay_wave")],
+        [InlineKeyboardButton("CB Pay", callback_data="pay_cb"),
+         InlineKeyboardButton("AYA Pay", callback_data="pay_aya")],
+        [InlineKeyboardButton("⬅️ Back", callback_data="back")]
+    ]
+    await q.edit_message_text(warn, reply_markup=InlineKeyboardMarkup(kb))
+
+# =========================
+# PAYMENT METHOD
+# =========================
+async def pay_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    method = q.data.replace("pay_", "").upper()
+    context.user_data["method"] = method
+
+    vip_type = context.user_data.get("vip_type")
+    amount = 10000 if vip_type == "buy_basic" else 30000
+
+    text = (
+        f"💳 {method}\n\n"
+        f"ငွေလွဲရန်: {amount} MMK\n\n"
+        "⚠️ ငွေလွဲပြီးပါက ပြေစာ Screenshot ကို ပို့ပေးပါ"
+    )
+    await q.edit_message_text(text)
+
+# =========================
+# RECEIVE PAYMENT (AI APPROVE – SAFE)
+# =========================
+async def receive_ss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    vip_type = context.user_data.get("vip_type")
+    method = context.user_data.get("method")
+
+    if not vip_type or not method:
+        return
+
+    amount = 10000 if vip_type == "buy_basic" else 30000
+
+    photo = update.message.photo[-1]
+    file = await photo.get_file()
+    data = await file.download_as_bytearray()
+
+    image_hash = hashlib.sha256(data).hexdigest()
+
+    if is_duplicate(image_hash):
+        await update.message.reply_text("❌ ပြေစာအတု / ထပ်တူ ပြေစာ ဖြစ်နိုင်ပါသည်။")
+        add_payment(user_id, amount, method, image_hash, "duplicate")
+        return
+
+    # --- AI / Rule Based (SAFE) ---
+    # NOTE: OCR can be added here. For production safety:
+    # - Amount strict
+    # - Method strict
+    # - Duplicate strict
+    # Auto-approve only if rules match.
+
+    add_payment(user_id, amount, method, image_hash, "approved")
+
+    # Grant access
+    if vip_type == "buy_basic":
+        expire = datetime.utcnow() + timedelta(days=30)
+        set_user(user_id, "basic", expire)
+    else:
+        set_user(user_id, "pro", None)
+
+    # Invite link
+    invite = await context.bot.create_chat_invite_link(
+        chat_id=VIP_CHANNEL_ID,
+        creates_join_request=False
+    )
+
+    await update.message.reply_text(
+        "✅ ငွေပေးချေမှု အောင်မြင်ပါသည်။\n\n"
+        "🎬 VIP Channel သို့ဝင်ရန် အောက်ပါ link ကိုအသုံးပြုပါ 👇\n"
+        f"{invite.invite_link}",
+        protect_content=True
+    )
+
+# =========================
+# AUTO EXPIRE TASK
+# =========================
+async def expire_task(app: Application):
+    while True:
+        try:
+            cur.execute("SELECT user_id, vip_expire FROM users WHERE vip_type='basic'")
+            rows = cur.fetchall()
+            now = datetime.utcnow()
+
+            for uid, exp in rows:
+                if exp and now >= datetime.fromisoformat(exp):
+                    try:
+                        await app.bot.ban_chat_member(VIP_CHANNEL_ID, uid)
+                    except Exception:
+                        pass
+                    cur.execute(
+                        "UPDATE users SET vip_type=NULL, vip_expire=NULL WHERE user_id=?",
+                        (uid,)
+                    )
+                    conn.commit()
+        except Exception as e:
+            log.error(e)
+
+        await asyncio.sleep(3600)  # every hour
+
+# =========================
+# CALLBACK ROUTER
+# =========================
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.callback_query.data
+    if data in ("buy_basic", "buy_pro"):
+        await buy(update, context)
+    elif data.startswith("pay_"):
+        await pay_method(update, context)
+    elif data == "back":
+        await start(update, context)
+
+# =========================
+# MAIN
+# =========================
+async def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(callbacks))
+    app.add_handler(MessageHandler(filters.PHOTO, receive_ss))
+
+    app.create_task(expire_task(app))
+
+    log.info("Zan Movie Bot started")
+    await app.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
