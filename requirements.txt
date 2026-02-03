@@ -1,7 +1,1 @@
-python-telegram-bot==20.7
-aiohttp
-python-dotenv
-pillow
-pytesseract
-opencv-python-headless
-schedule
+python-telegram-bot==21.7
