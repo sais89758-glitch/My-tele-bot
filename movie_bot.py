@@ -40,8 +40,10 @@ log = logging.getLogger("ZanMovieBot")
 # CONFIG
 # =====================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID"))
+
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+MAIN_CHANNEL = os.getenv("MAIN_CHANNEL")  # https://t.me/xxxx (string)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 
 logging.basicConfig(level=logging.INFO)
