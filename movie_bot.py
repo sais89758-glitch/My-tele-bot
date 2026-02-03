@@ -189,15 +189,20 @@ async def ads_scheduler(app: Application):
         """, (now,))
         for ad_id, ctype, fid, text in cur.fetchall():
             if ctype == "text":
-                msg = await app.bot.send_message(MAIN_CHANNEL_ID, text)
+                msg = await app.bot.send_message(
+                    chat_id=MAIN_CHANNEL,
+                    text=text
+                )
             elif ctype == "photo":
                 msg = await app.bot.send_photo(
-                    MAIN_CHANNEL_ID, fid,
+                    chat_id=MAIN_CHANNEL,
+                    photo=fid,
                     caption=text + f"\n\n📞 @{ADMIN_USERNAME}"
                 )
             else:
                 msg = await app.bot.send_video(
-                    MAIN_CHANNEL_ID, fid,
+                    chat_id=MAIN_CHANNEL,
+                    video=fid,
                     caption=text + f"\n\n📞 @{ADMIN_USERNAME}"
                 )
 
@@ -215,7 +220,10 @@ async def ads_scheduler(app: Application):
         """, (now,))
         for ad_id, msg_id in cur.fetchall():
             try:
-                await app.bot.delete_message(MAIN_CHANNEL_ID, msg_id)
+                await app.bot.delete_message(
+                    chat_id=MAIN_CHANNEL,
+                    message_id=msg_id
+                )
             except Exception:
                 pass
             cur.execute("DELETE FROM ads WHERE id=?", (ad_id,))
