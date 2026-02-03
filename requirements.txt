@@ -1,3 +1,7 @@
-python-telegram-bot==21.10
-requests
-matplotlib
+python-telegram-bot==20.7
+aiohttp
+python-dotenv
+pillow
+pytesseract
+opencv-python-headless
+schedule
