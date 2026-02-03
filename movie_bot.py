@@ -20,8 +20,9 @@ from telegram.ext import (
 import os
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-VIP_CHANNEL_ID = int(os.getenv("VIP_CHANNEL_ID"))
+
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+VIP_CHANNEL_ID = int(os.getenv("VIP_CHANNEL_ID", "0"))
 
 MAIN_CHANNEL = os.getenv("MAIN_CHANNEL")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
@@ -34,6 +35,7 @@ DB_PATH = "data/movie_bot.db"
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ZanMovieBot")
+
 # =====================
 # CONFIG
 # =====================
