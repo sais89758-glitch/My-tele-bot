@@ -116,32 +116,29 @@ WAITING_ACCOUNT_NAME = 1
 # START
 # =====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # handle both message & callback
-    target = update.message or update.callback_query.message
+    # handle both message & callback safely
+    if update.callback_query:
+        await update.callback_query.answer()
+        target = update.callback_query.message
+    else:
+        target = update.message
+
     text = (
-        "ငွေလွဲရန် (30000 MMK)
+        "🎬 Zan Movie Channel Bot
 
 "
-        f"💳 {method} Pay
-
+        "👑 Pro VIP – 30000 MMK (30 Days)
 "
-        f"📱 ဖုန်း: {PAY_PHONE}
+        "⛔ Screenshot / Screen Record / Download / Forward မရပါ
 "
-        f"👤 အမည်: {PAY_NAME}
-
-"
-        "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ
-"
-        "ခွဲလွဲ / မှားလွဲ ဖြစ်ပါက
-"
-        "ငွေပြန်မအမ်းပါ၊ VIP အတည်ပြုမည် မဟုတ်ပါ
-
-"
-        "⚠️ ပြေစာ Screenshot ပို့ပါ"
     )
 
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="pay_methods")]]
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    kb = [
+        [InlineKeyboardButton("👑 VIP ဝင်ရန်", callback_data="vip_buy")],
+        [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL)],
+    ]
+
+    await target.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))(text, reply_markup=InlineKeyboardMarkup(kb))
 
 # =====================================================
 # RECEIVE SCREENSHOT
@@ -175,7 +172,12 @@ async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     conn.commit()
 
+    # admin approve / reject buttons (method-aware)
+    label = f"✅ {method} Pay ဖြင့် ပေးချေမှုအောင်မြင်ပါသည်"
     admin_kb = [[
+        InlineKeyboardButton(label, callback_data=f"approve_{user.id}_{image_hash}"),
+        InlineKeyboardButton("❌ ငွေမရောက်ပါ", callback_data=f"reject_{user.id}_{image_hash}")
+    ]]
         InlineKeyboardButton("✅ KBZ Pay ဖြင့် ပေးချေမှုအောင်မြင်ပါသည်", callback_data=f"approve_{user.id}_{image_hash}"),
         InlineKeyboardButton("❌ ငွေမရောက်ပါ", callback_data=f"reject_{user.id}_{image_hash}")
     ]]
@@ -215,7 +217,8 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "approve":
         # set VIP expiry 30 days
-        expiry = (datetime.utcnow().replace(microsecond=0) ).strftime('%Y-%m-%d %H:%M:%S')
+        # VIP expiry = now + 30 days
+        expiry = (datetime.utcnow() + timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')(microsecond=0) ).strftime('%Y-%m-%d %H:%M:%S')
         cur.execute("UPDATE users SET is_vip=1, vip_expiry=? WHERE user_id=?", (expiry, user_id,))
         cur.execute("UPDATE users SET is_vip=1 WHERE user_id=?", (user_id,))
         cur.execute("UPDATE payments SET status='approved' WHERE image_hash=?", (image_hash,))
