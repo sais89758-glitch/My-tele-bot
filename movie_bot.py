@@ -1,9 +1,3 @@
-# ==========================================
-# Zan Movie VIP Bot (python-telegram-bot v20.x)
-# Python: 3.11.x
-# NO Updater USED (Application only)
-# ==========================================
-
 import os
 import asyncio
 import logging
@@ -26,20 +20,20 @@ from telegram.ext import (
 )
 
 # =========================
-# ENV CONFIG (REQUIRED)
+# CONFIG (FROM YOUR FILE)
 # =========================
+# ⚠️ Security Note: Do not share this file publicly with these keys!
+os.environ["BOT_TOKEN"] = "8515688348:AAHKbL-alScUufoYbciwO-E3V4pKCRdHMVk"
+os.environ["ADMIN_ID"] = "6445257462"
+os.environ["VIP_CHANNEL_ID"] = "-1003863175003"
+os.environ["MAIN_CHANNEL"] = "https://t.me/ZanchannelMM"
+os.environ["ADMIN_USERNAME"] = "Lucus22520"
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-VIP_CHANNEL_ID = int(os.getenv("VIP_CHANNEL_ID", "0"))
-MAIN_CHANNEL = os.getenv("MAIN_CHANNEL")            # https://t.me/xxxxx
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-
-# optional (not used yet, kept for future)
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+VIP_CHANNEL_ID = int(os.getenv("VIP_CHANNEL_ID"))
+MAIN_CHANNEL = os.getenv("MAIN_CHANNEL")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 
 # =========================
 # LOGGING
@@ -131,7 +125,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = [
         [InlineKeyboardButton("🌟 Pro VIP", callback_data="buy_pro")],
-        [InlineKeyboardButton("🥈 Basic VIP", callback_data="buy_basic")],
         [InlineKeyboardButton("📣 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL)],
         [InlineKeyboardButton("📞 Admin ဆက်သွယ်ရန်", url=f"https://t.me/{ADMIN_USERNAME}")],
     ]
@@ -206,6 +199,11 @@ async def receive_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     amount = 30000 if vip_type == "buy_pro" else 10000
 
+    # Check if message has photo
+    if not update.message.photo:
+        await update.message.reply_text("❌ Please send a photo of the receipt.")
+        return
+
     photo = update.message.photo[-1]
     file = await photo.get_file()
     data = await file.download_as_bytearray()
@@ -223,12 +221,17 @@ async def receive_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         set_user(user_id, "basic", datetime.utcnow() + timedelta(days=30))
 
-    invite = await context.bot.create_chat_invite_link(VIP_CHANNEL_ID)
+    try:
+        invite = await context.bot.create_chat_invite_link(VIP_CHANNEL_ID, member_limit=1)
+        invite_link = invite.invite_link
+    except Exception as e:
+        log.error(f"Error creating invite link: {e}")
+        invite_link = "Error generating link. Contact Admin."
 
     await update.message.reply_text(
         "✅ Payment successful\n\n"
         "🎬 VIP Channel Link 👇\n"
-        f"{invite.invite_link}",
+        f"{invite_link}",
         protect_content=True,
     )
 
@@ -236,6 +239,7 @@ async def receive_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # AUTO EXPIRE TASK
 # =========================
 async def expire_task(app: Application):
+    log.info("Expire task started")
     while True:
         try:
             cur.execute("SELECT user_id, vip_expire FROM users WHERE vip_type='basic'")
@@ -246,11 +250,12 @@ async def expire_task(app: Application):
                 if exp and now >= datetime.fromisoformat(exp):
                     try:
                         await app.bot.ban_chat_member(VIP_CHANNEL_ID, uid)
-                    except Exception:
-                        pass
+                        await app.bot.unban_chat_member(VIP_CHANNEL_ID, uid) # Optional: unban to allow rejoin later
+                    except Exception as e:
+                        log.error(f"Failed to kick user {uid}: {e}")
                     set_user(uid, None, None)
         except Exception as e:
-            log.error(e)
+            log.error(f"Expire task error: {e}")
 
         await asyncio.sleep(3600)
 
@@ -258,6 +263,7 @@ async def expire_task(app: Application):
 # ADS SCHEDULER
 # =========================
 async def ads_scheduler(app: Application):
+    log.info("Ads scheduler started")
     while True:
         try:
             now = datetime.utcnow().isoformat()
@@ -272,48 +278,68 @@ async def ads_scheduler(app: Application):
             )
 
             for ad_id, ctype, fid, text in cur.fetchall():
-                if ctype == "text":
-                    msg = await app.bot.send_message(MAIN_CHANNEL, text)
-                elif ctype == "photo":
-                    msg = await app.bot.send_photo(
-                        MAIN_CHANNEL,
-                        fid,
-                        caption=text + f"\n\n📞 @{ADMIN_USERNAME}",
-                    )
-                else:
-                    msg = await app.bot.send_video(
-                        MAIN_CHANNEL,
-                        fid,
-                        caption=text + f"\n\n📞 @{ADMIN_USERNAME}",
-                    )
-
-                cur.execute(
-                    "UPDATE ads SET message_id=? WHERE id=?",
-                    (msg.message_id, ad_id),
-                )
-                conn.commit()
+                try:
+                    msg = None
+                    caption_text = text + f"\n\n📞 @{ADMIN_USERNAME}"
+                    
+                    if ctype == "text":
+                        msg = await app.bot.send_message(MAIN_CHANNEL, text)
+                    elif ctype == "photo":
+                        msg = await app.bot.send_photo(
+                            MAIN_CHANNEL,
+                            fid,
+                            caption=caption_text,
+                        )
+                    else:
+                        msg = await app.bot.send_video(
+                            MAIN_CHANNEL,
+                            fid,
+                            caption=caption_text,
+                        )
+                    
+                    if msg:
+                        cur.execute(
+                            "UPDATE ads SET message_id=? WHERE id=?",
+                            (msg.message_id, ad_id),
+                        )
+                        conn.commit()
+                except Exception as inner_e:
+                    log.error(f"Failed to send ad {ad_id}: {inner_e}")
+                    
         except Exception as e:
-            log.error(e)
+            log.error(f"Ads scheduler error: {e}")
 
         await asyncio.sleep(30)
 
 # =========================
+# POST INIT (FIX FOR LOOPS)
+# =========================
+async def post_init(application: Application):
+    """
+    Starts background tasks after the application is initialized.
+    This fixes the 'Task created while app is not running' warning.
+    """
+    application.create_task(expire_task(application))
+    application.create_task(ads_scheduler(application))
+
+# =========================
 # MAIN ENTRY
 # =========================
-async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+def main():
+    """
+    Main function must be synchronous to avoid 'Event loop is already running'
+    errors when using app.run_polling().
+    """
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buy_vip, pattern="^buy_"))
     app.add_handler(CallbackQueryHandler(choose_method, pattern="^pay_"))
     app.add_handler(MessageHandler(filters.PHOTO, receive_payment))
 
-    app.create_task(expire_task(app))
-    app.create_task(ads_scheduler(app))
-
-    log.info("Zan Movie Bot started")
-    await app.run_polling()
-
+    log.info("Zan Movie Bot started...")
+    # run_polling handles the asyncio loop internally
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
