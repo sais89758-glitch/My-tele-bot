@@ -50,7 +50,7 @@ from datetime import datetime
 # =====================================================
 # CONFIG
 # =====================================================
-BOT_TOKEN = "8515688348:AAFenIGE3A5O98YRLt7mFn_NBr_Ea06gJMA"
+BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0"
 ADMIN_ID = 6445257462
 VIP_CHANNEL_ID = -1003863175003
 MAIN_CHANNEL = "https://t.me/ZanchannelMM"
