@@ -1,6 +1,6 @@
 # Zan Movie Channel Bot – FULL FINAL VERSION (Fixed Token & Asyncio)
 # Architect: System Architect & Senior Python Developer
-# Version: 2.3 (Added VIP Channel Link on Approval)
+# Version: 2.4 (Updated VIP Channel Link logic)
 
 import logging
 import sqlite3
@@ -19,13 +19,16 @@ from telegram.ext import (
 )
 
 # ================= CONFIGURATION =================
-# UPDATED TOKEN FROM 'NOW CODE.txt' (The working one)
 BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0" 
 ADMIN_ID = 6445257462
 VIP_PRICE = 30000
 PAY_PHONE = "09960202983"
 PAY_NAME = "Sai Zaw Ye Lwin"
+
+# Links
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
+# VIP Channel ID: -1003863175003 အတွက် Link (Private Channel ဖြစ်ပါက Invite Link ကို ဤနေရာတွင် ထည့်ပါ)
+VIP_CHANNEL_URL = "https://t.me/c/3863175003/1" # သို့မဟုတ် သင့် Invite Link ကို ပြောင်းထည့်နိုင်ပါသည်
 
 # ================= LOGGING SETUP =================
 logging.basicConfig(
@@ -38,7 +41,7 @@ def init_db():
     conn = sqlite3.connect("movie_bot.db", check_same_thread=False)
     cur = conn.cursor()
     
-    # Users Table (VIP Status)
+    # Users Table
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -47,7 +50,7 @@ def init_db():
     )
     """)
     
-    # Payments Table (Transaction History)
+    # Payments Table
     cur.execute("""
     CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,19 +66,14 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Initialize DB immediately
 init_db()
 
-# ================= STATES FOR CONVERSATION =================
+# ================= STATES =================
 WAITING_SLIP, WAITING_NAME = range(2)
 
-# ================= HELPER FUNCTIONS =================
+# ================= HELPERS =================
 def get_db():
     return sqlite3.connect("movie_bot.db", check_same_thread=False)
-
-async def check_is_admin(update: Update):
-    user_id = update.effective_user.id
-    return user_id == ADMIN_ID
 
 # ================= START COMMAND =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,7 +92,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)],
     ]
 
-    # Handle both new message and callback edit
     if update.callback_query:
         await target.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
@@ -155,7 +152,7 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text(text)
     return WAITING_SLIP
 
-# ================= CONVERSATION HANDLERS =================
+# ================= CONVERSATION =================
 async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("⚠️ ဓာတ်ပုံ (Screenshot) သာ ပို့ပေးပါ။")
@@ -178,7 +175,6 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     slip_hash = context.user_data.get("slip_hash", "NoHash")
     file_id = context.user_data.get("slip_file")
 
-    # Save PENDING payment
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
@@ -188,13 +184,11 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    # Notify User
     await update.message.reply_text(
         "ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ။\n"
         "Admin ထံမှ အမြန်ဆုံး အကြောင်းကြားပေးပါမည်။"
     )
 
-    # Notify Admin
     kb = [
         [InlineKeyboardButton("✅ အတည်ပြုသည်", callback_data=f"approve_{user_id}")],
         [InlineKeyboardButton("❌ ငြင်းပယ်သည်", callback_data=f"reject_{user_id}")],
@@ -234,23 +228,18 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur = conn.cursor()
 
     if action == "approve":
-        # Activate VIP
         expiry_date = (datetime.now() + timedelta(days=30)).isoformat()
-        
-        # Update User
         cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)", (user_id, expiry_date))
-        
-        # Update Payment Status
         cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
-        
         conn.commit()
         
-        # Updated Approval Message with Channel Link
+        # ✅ VIP Approval Message with correct VIP Channel Link
         vip_text = (
             "✅ VIP အတည်ပြုပြီးပါပြီ။ (30 ရက်)\n"
             "Channel တွင် ဇာတ်ကားများ ကြည့်ရှုနိုင်ပါပြီ။"
         )
-        vip_kb = [[InlineKeyboardButton("🍿 VIP Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)]]
+        # အောက်ပါနေရာတွင် VIP_CHANNEL_URL ကို သုံးထားပါသည်
+        vip_kb = [[InlineKeyboardButton("🍿 VIP Channel ဝင်ရန်", url=VIP_CHANNEL_URL)]]
         
         await context.bot.send_message(
             user_id, 
@@ -261,7 +250,6 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_caption(caption=query.message.caption + "\n\n✅ Approved by Admin")
         
     elif action == "reject":
-        # Update Payment Status
         cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (user_id,))
         conn.commit()
         
@@ -270,10 +258,10 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-# ================= ADMIN DASHBOARD (/tharngal) =================
+# ================= ADMIN DASHBOARD =================
 async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return # Ignore non-admins
+        return
 
     conn = get_db()
     cur = conn.cursor()
@@ -282,30 +270,21 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today_str = now.strftime("%Y-%m-%d")
     month_str = now.strftime("%Y-%m")
 
-    # 1. Today Income
     cur.execute("SELECT COUNT(*) FROM payments WHERE status='APPROVED' AND created_at LIKE ?", (f"{today_str}%",))
-    today_count = cur.fetchone()[0]
-    today_income = today_count * VIP_PRICE
+    today_income = cur.fetchone()[0] * VIP_PRICE
 
-    # 2. Month Income
     cur.execute("SELECT COUNT(*) FROM payments WHERE status='APPROVED' AND created_at LIKE ?", (f"{month_str}%",))
-    month_count = cur.fetchone()[0]
-    month_income = month_count * VIP_PRICE
+    month_income = cur.fetchone()[0] * VIP_PRICE
 
-    # 3. Total Income
     cur.execute("SELECT COUNT(*) FROM payments WHERE status='APPROVED'")
-    total_count = cur.fetchone()[0]
-    total_income = total_count * VIP_PRICE
+    total_income = cur.fetchone()[0] * VIP_PRICE
 
-    # 4. Active VIPs
     cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
     active_vips = cur.fetchone()[0]
 
-    # 5. Rejected/Scam
     cur.execute("SELECT COUNT(*) FROM payments WHERE status='REJECTED'")
     rejected_count = cur.fetchone()[0]
 
-    # 6. Recent List (Calendar style simplified)
     list_text = "📅 <b>လတ်တလော ဝင်ငွေစာရင်း</b>\n"
     cur.execute("SELECT created_at, account_name FROM payments WHERE status='APPROVED' ORDER BY id DESC LIMIT 5")
     recent = cur.fetchall()
@@ -328,47 +307,35 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔙 Back to Home", callback_data="back_home")]]
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-# ================= BACKGROUND TASK: EXPIRY CHECKER =================
+# ================= EXPIRY CHECKER =================
 async def vip_expiry_checker(app: Application):
-    """Checks for expired VIPs every hour using asyncio loop"""
     while True:
         try:
             conn = get_db()
             cur = conn.cursor()
-            
             now = datetime.now().isoformat()
-            # Find expired users
             cur.execute("SELECT user_id FROM users WHERE is_vip=1 AND vip_expiry < ?", (now,))
             expired_users = cur.fetchall()
 
             for (uid,) in expired_users:
                 try:
-                    # Update DB
                     cur.execute("UPDATE users SET is_vip=0, vip_expiry=NULL WHERE user_id=?", (uid,))
                     conn.commit()
-                    # Notify User
                     await app.bot.send_message(uid, "⛔️ VIP သက်တမ်းကုန်သွားပါပြီ။ သက်တမ်းတိုးရန် /start နှိပ်ပါ။")
-                    logger.info(f"Expired VIP for user {uid}")
                 except Exception as e:
                     logger.error(f"Failed to expire user {uid}: {e}")
-            
             conn.close()
         except Exception as e:
             logger.error(f"Error in vip_expiry_checker: {e}")
-        
-        # Wait for 1 hour
         await asyncio.sleep(3600)
 
 async def post_init(app: Application):
-    """Start background tasks"""
     app.create_task(vip_expiry_checker(app))
 
-# ================= MAIN APP LOOP =================
+# ================= MAIN =================
 def main():
-    # Builder setup with post_init to start background tasks
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    # 1. Conversation Handler (Must be before basic handlers)
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.PHOTO, receive_slip)],
         states={
@@ -378,20 +345,16 @@ def main():
     )
     application.add_handler(conv_handler)
 
-    # 2. Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("tharngal", admin_dashboard))
 
-    # 3. Callback Handlers
     application.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
     application.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
     application.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
     application.add_handler(CallbackQueryHandler(payment_info, pattern="^pay_"))
     application.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|reject)_"))
 
-    # Start Polling
     logger.info("Bot is starting...")
-    # drop_pending_updates=True ensures the bot starts fresh and ignores old piled up messages
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
