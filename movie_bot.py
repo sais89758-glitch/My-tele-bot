@@ -23,7 +23,7 @@ from telegram.ext import (
 # CONFIG (FROM YOUR FILE)
 # =========================
 # ⚠️ Security Note: Do not share this file publicly with these keys!
-os.environ["BOT_TOKEN"] = "8515688348:AAHKbL-alScUufoYbciwO-E3V4pKCRdHMVk"
+os.environ["BOT_TOKEN"] = "8515688348:AAFenIGE3A5O98YRLt7mFn_NBr_Ea06gJMA"
 os.environ["ADMIN_ID"] = "6445257462"
 os.environ["VIP_CHANNEL_ID"] = "-1003863175003"
 os.environ["MAIN_CHANNEL"] = "https://t.me/ZanchannelMM"
