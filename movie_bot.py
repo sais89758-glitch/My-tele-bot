@@ -284,20 +284,68 @@ async def tharngal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    cur.execute("SELECT COUNT(*) FROM payments WHERE status='approved'")
-    total_sales = cur.fetchone()[0]
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
+    month_prefix = now.strftime("%Y-%m")
 
-    cur.execute("SELECT COUNT(*) FROM payments WHERE status='rejected'")
-    scam_count = cur.fetchone()[0]
+    # --- Revenue per day for current month ---
+    cur.execute(
+        "SELECT substr(created_at,1,10) as d, COUNT(*) FROM payments WHERE status='approved' AND created_at LIKE ? GROUP BY d",
+        (f"{month_prefix}%",)
+    )
+    rows = cur.fetchall()
+
+    daily_map = {d: c * VIP_PRICE for d, c in rows}
+
+    # --- Summary numbers ---
+    daily_revenue = daily_map.get(today, 0)
+    monthly_revenue = sum(daily_map.values())
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='approved'")
+    total_revenue = cur.fetchone()[0] * VIP_PRICE
 
     cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
     active_vip = cur.fetchone()[0]
 
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='rejected'")
+    scam_count = cur.fetchone()[0]
+
+    # --- Calendar style bar view ---
+    calendar_lines = []
+    for day in range(1, 32):
+        try:
+            date_str = f"{month_prefix}-{day:02d}"
+            amount = daily_map.get(date_str, 0)
+            bar = "▇" * (amount // VIP_PRICE) if amount > 0 else ""
+            calendar_lines.append(f"{day:02d} : {amount} MMK {bar}")
+        except:
+            pass
+
+    calendar_text = "
+".join(calendar_lines)
+
     text = (
-        "📊 ADMIN DASHBOARD (/tharngal)\n\n"
-        f"✅ အောင်မြင်သော VIP ဝယ်ယူမှု: {total_sales}\n"
-        f"❌ ပယ်ချထားသော / Scam: {scam_count}\n"
-        f"👑 Active VIP: {active_vip}"
+        "📊 ADMIN DASHBOARD (/tharngal)
+
+"
+        f"👑 Active VIP: {active_vip}
+
+"
+        f"💰 ယနေ့ ဝင်ငွေ: {daily_revenue} MMK
+"
+        f"📆 ယခုလ ဝင်ငွေ: {monthly_revenue} MMK
+"
+        f"🏦 စုစုပေါင်း ဝင်ငွေ: {total_revenue} MMK
+
+"
+        f"❌ Scam / ပယ်ချထားမှု: {scam_count}
+
+"
+        "📅 လစဉ် ဝင်ငွေ ပြက္ခဒိန်
+"
+        "====================
+"
+        f"{calendar_text}"
     )
 
     await update.message.reply_text(text)
