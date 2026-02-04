@@ -1,6 +1,6 @@
 # Zan Movie Channel Bot – FULL FINAL VERSION (Fixed Token & Asyncio)
 # Architect: System Architect & Senior Python Developer
-# Version: 2.2 (Token Correction)
+# Version: 2.3 (Added VIP Channel Link on Approval)
 
 import logging
 import sqlite3
@@ -245,7 +245,19 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         conn.commit()
         
-        await context.bot.send_message(user_id, "✅ VIP အတည်ပြုပြီးပါပြီ။ (30 ရက်)\nChannel တွင် ဇာတ်ကားများ ကြည့်ရှုနိုင်ပါပြီ။")
+        # Updated Approval Message with Channel Link
+        vip_text = (
+            "✅ VIP အတည်ပြုပြီးပါပြီ။ (30 ရက်)\n"
+            "Channel တွင် ဇာတ်ကားများ ကြည့်ရှုနိုင်ပါပြီ။"
+        )
+        vip_kb = [[InlineKeyboardButton("🍿 VIP Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)]]
+        
+        await context.bot.send_message(
+            user_id, 
+            vip_text, 
+            reply_markup=InlineKeyboardMarkup(vip_kb)
+        )
+        
         await query.edit_message_caption(caption=query.message.caption + "\n\n✅ Approved by Admin")
         
     elif action == "reject":
