@@ -1,62 +1,43 @@
-# Zan Movie Channel Bot – FINAL FULL CODE (Event Loop FIXED)
-# --------------------------------------------------
-# FIX SUMMARY:
-# ❌ Error: RuntimeError: This event loop is already running
-# ❌ Cause: Using asyncio.run(main()) together with app.run_polling()
-# ✅ Solution: Use python-telegram-bot v20 CORRECT ENTRY STYLE
-#    -> DO NOT wrap run_polling() inside asyncio.run()
-#    -> main() must be NORMAL (not async)
-# --------------------------------------------------
+# Zan Movie Channel Bot – FINAL FULL CODE (SYNTAX & LOGIC FIXED)
+# =====================================================
+# python-telegram-bot v20.8 compatible
+# Polling mode | Single instance safe
+# =====================================================
 
 """
-REQUIREMENTS (MUST INSTALL BEFORE RUN):
-
-pip install -U python-telegram-bot==20.8
-
-If you are on Render / Railway / VPS:
-- Add this line to requirements.txt
-  python-telegram-bot==20.8
+REQUIREMENTS:
+  pip install -U python-telegram-bot==20.8
 """
 
-import sys
+# =====================================================
+# IMPORTS
+# =====================================================
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    filters,
+)
 
-# --------------------------------------------------
-# SAFE IMPORT GUARD
-# --------------------------------------------------
-try:
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import (
-        Application,
-        CommandHandler,
-        MessageHandler,
-        CallbackQueryHandler,
-        ContextTypes,
-        filters,
-        ConversationHandler,
-    )
-except ModuleNotFoundError:
-    print("❌ ERROR: python-telegram-bot is not installed")
-    print("👉 Run: pip install -U python-telegram-bot==20.8")
-    sys.exit(1)
-
-# --------------------------------------------------
-# STANDARD LIBS
-# --------------------------------------------------
 import logging
-import hashlib
 import sqlite3
-from datetime import datetime
+import hashlib
+from datetime import datetime, timedelta
 
 # =====================================================
 # CONFIG
 # =====================================================
-BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0"
+BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0"   # 🔴 replace
 ADMIN_ID = 6445257462
-VIP_CHANNEL_ID = -1003863175003
-MAIN_CHANNEL = "https://t.me/ZanchannelMM"
 ADMIN_USERNAME = "lucus2252"
+VIP_CHANNEL_ID = -1003863175003
+MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
 
-VIP_PRICE = 30000  # MMK
+VIP_PRICE = 30000
 PAY_PHONE = "09960202983"
 PAY_NAME = "Sai Zaw Ye Lwin"
 
@@ -80,27 +61,14 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 
-# migrate old table if needed
-try:
-    cur.execute("ALTER TABLE users ADD COLUMN vip_expiry TEXT")
-except Exception:
-    pass
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users_old (
-    user_id INTEGER PRIMARY KEY,
-    is_vip INTEGER DEFAULT 0
-)
-""")
-
 cur.execute("""
 CREATE TABLE IF NOT EXISTS payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     method TEXT,
-    image_hash TEXT UNIQUE,
-    status TEXT,
+    slip_hash TEXT,
     account_name TEXT,
+    status TEXT,
     created_at TEXT
 )
 """)
@@ -110,13 +78,13 @@ conn.commit()
 # =====================================================
 # STATES
 # =====================================================
-WAITING_ACCOUNT_NAME = 1
+WAITING_SLIP = 1
+WAITING_NAME = 2
 
 # =====================================================
 # START
 # =====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # handle both message & callback safely
     if update.callback_query:
         await update.callback_query.answer()
         target = update.callback_query.message
@@ -124,73 +92,130 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = update.message
 
     text = (
-        "🎬 Zan Movie Channel Bot
-
-"
-        "👑 Pro VIP – 30000 MMK (30 Days)
-"
-        "⛔ Screenshot / Screen Record / Download / Forward မရပါ
-"
+        "🎬 Zan Movie Channel Bot\n\n"
+        "⛔ Screenshot / Screen Record / Download / Forward မရပါ\n\n"
+        "👑 Pro VIP – 30000 MMK (30 Days)"
     )
 
     kb = [
         [InlineKeyboardButton("👑 VIP ဝင်ရန်", callback_data="vip_buy")],
-        [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL)],
+        [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)],
     ]
 
-    await target.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))(text, reply_markup=InlineKeyboardMarkup(kb))
+    await target.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 # =====================================================
-# RECEIVE SCREENSHOT
+# VIP WARNING
 # =====================================================
-async def receive_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    text = (
+        "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+        "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
+        "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
+        "⛔ ငွေကို တစ်ခါတည်း အပြည့်လွဲရပါမည်\n"
+        "⛔ ခွဲလွဲပါက VIP မအတည်ပြုပါ\n\n"
+        "⛔ Screenshot / Screen Record / Download / Forward မရပါ\n\n"
+        "📌 Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်"
+    )
+
+    kb = [
+        [InlineKeyboardButton("သိရှိနားလည်ပါပြီ", callback_data="pay_methods")],
+        [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")],
+    ]
+
+    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+# =====================================================
+# PAYMENT METHODS
+# =====================================================
+async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    kb = [
+        [InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ")],
+        [InlineKeyboardButton("Wave Pay", callback_data="pay_WAVE")],
+        [InlineKeyboardButton("CB Pay", callback_data="pay_CB")],
+        [InlineKeyboardButton("AYA Pay", callback_data="pay_AYA")],
+        [InlineKeyboardButton("⬅ Back", callback_data="back_home")],
+    ]
+
+    await q.message.edit_text("ငွေပေးချေမှုနည်းလမ်း ရွေးပါ", reply_markup=InlineKeyboardMarkup(kb))
+
+# =====================================================
+# PAYMENT INFO
+# =====================================================
+async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    method = q.data.replace("pay_", "")
+    context.user_data["method"] = method
+
+    text = (
+        f"ငွေလွဲရန် (30000 MMK)\n\n"
+        f"💳 {method} Pay\n\n"
+        f"📱 ဖုန်း: {PAY_PHONE}\n"
+        f"👤 အမည်: {PAY_NAME}\n\n"
+        "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ\n"
+        "ခွဲလွဲ / မှားလွဲပါက\n"
+        "ငွေပြန်မအမ်း / VIP မအတည်ပြုပါ\n\n"
+        "⚠️ ပြေစာ Screenshot ပို့ပါ"
+    )
+
+    await q.message.edit_text(text)
+    return WAITING_SLIP
+
+# =====================================================
+# RECEIVE SLIP
+# =====================================================
+async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         return
 
-    context.user_data["slip_file_id"] = update.message.photo[-1].file_id
+    context.user_data["slip_id"] = update.message.photo[-1].file_id
 
     await update.message.reply_text(
-        "ပြေစာ Screenshot လက်ခံရရှိပါသည် ✅\n\n"
-        "ကျေးဇူးပြု၍ ငွေလွဲသူအကောင့်အမည် ကို ပို့ပေးပါ။"
+        "ပြေစာ Screenshot လက်ခံရရှိပါသည် ✅\n"
+        "ကျေးဇူးပြု၍ ငွေလွဲသူ အကောင့်နာမည် ပို့ပေးပါ။"
     )
-    return WAITING_ACCOUNT_NAME
+
+    return WAITING_NAME
 
 # =====================================================
-# RECEIVE ACCOUNT NAME → SEND TO ADMIN
+# RECEIVE NAME → SEND TO ADMIN
 # =====================================================
-async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    account_name = update.message.text
-    slip_file_id = context.user_data.get("slip_file_id")
-    method = context.user_data.get("method")
+async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    account_name = update.message.text
+    slip_id = context.user_data.get("slip_id")
+    method = context.user_data.get("method")
 
-    image_hash = hashlib.sha256(f"{slip_file_id}{account_name}".encode()).hexdigest()
+    slip_hash = hashlib.sha256(f"{slip_id}{account_name}".encode()).hexdigest()
 
     cur.execute(
-        "INSERT INTO payments (user_id, method, image_hash, status, account_name, created_at) VALUES (?,?,?,?,?,?)",
-        (user.id, method, image_hash, "pending", account_name, datetime.utcnow().isoformat())
+        "INSERT INTO payments (user_id, method, slip_hash, account_name, status, created_at) VALUES (?,?,?,?,?,?)",
+        (user.id, method, slip_hash, account_name, "pending", datetime.utcnow().isoformat())
     )
     conn.commit()
 
-    # admin approve / reject buttons (method-aware)
-    label = f"✅ {method} Pay ဖြင့် ပေးချေမှုအောင်မြင်ပါသည်"
     admin_kb = [[
-        InlineKeyboardButton(label, callback_data=f"approve_{user.id}_{image_hash}"),
-        InlineKeyboardButton("❌ ငွေမရောက်ပါ", callback_data=f"reject_{user.id}_{image_hash}")
-    ]]
-        InlineKeyboardButton("✅ KBZ Pay ဖြင့် ပေးချေမှုအောင်မြင်ပါသည်", callback_data=f"approve_{user.id}_{image_hash}"),
-        InlineKeyboardButton("❌ ငွေမရောက်ပါ", callback_data=f"reject_{user.id}_{image_hash}")
+        InlineKeyboardButton(f"✅ {method} Pay ဖြင့် အောင်မြင်", callback_data=f"approve_{user.id}_{slip_hash}"),
+        InlineKeyboardButton("❌ ငွေမရောက်ပါ", callback_data=f"reject_{user.id}_{slip_hash}"),
     ]]
 
     await context.bot.send_photo(
         chat_id=ADMIN_ID,
-        photo=slip_file_id,
+        photo=slip_id,
         caption=(
             "💳 ငွေလွဲပြေစာ အသစ်\n\n"
-            f"👤 User: {user.full_name}\n"
-            f"🆔 ID: {user.id}\n"
+            f"👤 {user.full_name}\n"
+            f"🆔 {user.id}\n"
             f"💳 Method: {method}\n"
-            f"📝 ငွေလွဲသူအကောင့်အမည်: {account_name}"
+            f"📝 Name: {account_name}"
         ),
         reply_markup=InlineKeyboardMarkup(admin_kb)
     )
@@ -203,45 +228,34 @@ async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 # =====================================================
-# ADMIN APPROVE / REJECT (PAYMENT METHOD AWARE + VIP EXPIRY TIMER)
-# =====================================================
-# =====================================================
-# ADMIN APPROVE / REJECT
+# ADMIN ACTION
 # =====================================================
 async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    action, user_id, image_hash = q.data.split("_")
+    action, user_id, slip_hash = q.data.split("_")
     user_id = int(user_id)
 
     if action == "approve":
-        # set VIP expiry 30 days
-        # VIP expiry = now + 30 days
-        expiry = (datetime.utcnow() + timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')(microsecond=0) ).strftime('%Y-%m-%d %H:%M:%S')
-        cur.execute("UPDATE users SET is_vip=1, vip_expiry=? WHERE user_id=?", (expiry, user_id,))
-        cur.execute("UPDATE users SET is_vip=1 WHERE user_id=?", (user_id,))
-        cur.execute("UPDATE payments SET status='approved' WHERE image_hash=?", (image_hash,))
+        expiry = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?,?,?)",
+                    (user_id, 1, expiry))
+        cur.execute("UPDATE payments SET status='approved' WHERE slip_hash=?", (slip_hash,))
         conn.commit()
 
         invite = await context.bot.create_chat_invite_link(VIP_CHANNEL_ID, member_limit=1)
-                pay_text = f"✅ {method} ဖြင့် ပေးချေမှုအောင်မြင်ပါသည်"
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=pay_text + "
 
-🎬 VIP Channel Link 👇
-" + invite.invite_link,
-            protect_content=True
-        )
+        await context.bot.send_message(
             chat_id=user_id,
             text=f"✅ VIP အတည်ပြုပြီးပါပြီ\n\n🎬 Channel Link 👇\n{invite.invite_link}",
             protect_content=True
         )
+
         await q.edit_message_caption(q.message.caption + "\n\n🟢 အတည်ပြုပြီး")
 
     else:
-        cur.execute("UPDATE payments SET status='rejected' WHERE image_hash=?", (image_hash,))
+        cur.execute("UPDATE payments SET status='rejected' WHERE slip_hash=?", (slip_hash,))
         conn.commit()
 
         await context.bot.send_message(
@@ -251,24 +265,21 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_caption(q.message.caption + "\n\n🔴 ပယ်ချပြီး")
 
 # =====================================================
-# MAIN (CORRECT ENTRY POINT)
+# MAIN
 # =====================================================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
     app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
     app.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
     app.add_handler(CallbackQueryHandler(payment_info, pattern="^pay_"))
-    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$") )
-
-    # admin panel command
-    app.add_handler(CommandHandler("tharngal", admin_panel))
     app.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|reject)_"))
 
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.PHOTO, receive_receipt)],
-        states={WAITING_ACCOUNT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_account_name)]},
+        entry_points=[MessageHandler(filters.PHOTO, receive_slip)],
+        states={WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)]},
         fallbacks=[CommandHandler("start", start)],
     )
 
@@ -276,6 +287,7 @@ def main():
 
     log.info("Zan Movie Channel Bot Started")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
