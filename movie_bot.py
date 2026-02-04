@@ -1,6 +1,6 @@
-# Zan Movie Channel Bot – FULL FINAL VERSION
+# Zan Movie Channel Bot – FULL FINAL VERSION (Fixed JobQueue Error)
 # Architect: System Architect & Senior Python Developer
-# Version: 2.0 (Production Ready)
+# Version: 2.1 (Asyncio Fix)
 
 import logging
 import sqlite3
@@ -316,37 +316,44 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
 # ================= BACKGROUND TASK: EXPIRY CHECKER =================
-async def vip_expiry_checker(context: ContextTypes.DEFAULT_TYPE):
-    """Checks for expired VIPs every hour"""
-    conn = get_db()
-    cur = conn.cursor()
-    
-    now = datetime.now().isoformat()
-    # Find expired users
-    cur.execute("SELECT user_id FROM users WHERE is_vip=1 AND vip_expiry < ?", (now,))
-    expired_users = cur.fetchall()
-
-    for (uid,) in expired_users:
+async def vip_expiry_checker(app: Application):
+    """Checks for expired VIPs every hour using asyncio loop"""
+    while True:
         try:
-            # Update DB
-            cur.execute("UPDATE users SET is_vip=0, vip_expiry=NULL WHERE user_id=?", (uid,))
-            conn.commit()
-            # Notify User
-            await context.bot.send_message(uid, "⛔️ VIP သက်တမ်းကုန်သွားပါပြီ။ သက်တမ်းတိုးရန် /start နှိပ်ပါ။")
-            logger.info(f"Expired VIP for user {uid}")
+            conn = get_db()
+            cur = conn.cursor()
+            
+            now = datetime.now().isoformat()
+            # Find expired users
+            cur.execute("SELECT user_id FROM users WHERE is_vip=1 AND vip_expiry < ?", (now,))
+            expired_users = cur.fetchall()
+
+            for (uid,) in expired_users:
+                try:
+                    # Update DB
+                    cur.execute("UPDATE users SET is_vip=0, vip_expiry=NULL WHERE user_id=?", (uid,))
+                    conn.commit()
+                    # Notify User
+                    await app.bot.send_message(uid, "⛔️ VIP သက်တမ်းကုန်သွားပါပြီ။ သက်တမ်းတိုးရန် /start နှိပ်ပါ။")
+                    logger.info(f"Expired VIP for user {uid}")
+                except Exception as e:
+                    logger.error(f"Failed to expire user {uid}: {e}")
+            
+            conn.close()
         except Exception as e:
-            logger.error(f"Failed to expire user {uid}: {e}")
-    
-    conn.close()
+            logger.error(f"Error in vip_expiry_checker: {e}")
+        
+        # Wait for 1 hour
+        await asyncio.sleep(3600)
+
+async def post_init(app: Application):
+    """Start background tasks"""
+    app.create_task(vip_expiry_checker(app))
 
 # ================= MAIN APP LOOP =================
 def main():
-    # Builder setup
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    # Add JobQueue for background task
-    job_queue = application.job_queue
-    job_queue.run_repeating(vip_expiry_checker, interval=3600, first=10)
+    # Builder setup with post_init to start background tasks
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     # 1. Conversation Handler (Must be before basic handlers)
     conv_handler = ConversationHandler(
@@ -372,6 +379,7 @@ def main():
     # Start Polling
     logger.info("Bot is starting...")
     # drop_pending_updates=True ensures the bot starts fresh and ignores old piled up messages
+    # This also helps prevent Conflict errors if the bot was restarted quickly
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
