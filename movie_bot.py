@@ -1,6 +1,6 @@
-# Zan Movie Channel Bot – FULL FINAL VERSION (Fixed JobQueue Error)
+# Zan Movie Channel Bot – FULL FINAL VERSION (Fixed Token & Asyncio)
 # Architect: System Architect & Senior Python Developer
-# Version: 2.1 (Asyncio Fix)
+# Version: 2.2 (Token Correction)
 
 import logging
 import sqlite3
@@ -19,7 +19,8 @@ from telegram.ext import (
 )
 
 # ================= CONFIGURATION =================
-BOT_TOKEN = "8515688348:AAHKbL-alScUufoYbciwO-E3V4pKCRdHMVk"  # Token from 'i want.txt'
+# UPDATED TOKEN FROM 'NOW CODE.txt' (The working one)
+BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0" 
 ADMIN_ID = 6445257462
 VIP_PRICE = 30000
 PAY_PHONE = "09960202983"
@@ -379,7 +380,6 @@ def main():
     # Start Polling
     logger.info("Bot is starting...")
     # drop_pending_updates=True ensures the bot starts fresh and ignores old piled up messages
-    # This also helps prevent Conflict errors if the bot was restarted quickly
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
