@@ -1,9 +1,7 @@
 # Zan Movie VIP Bot
 
 Telegram VIP-only Movie Bot
-- Basic VIP (30 days auto expire)
-- Pro VIP (Lifetime)
-- AI payment approve
+-  VIP (30 days auto expire)
 - Auto kick after expiry
 - Ads scheduler
 
