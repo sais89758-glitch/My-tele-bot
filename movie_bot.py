@@ -1,17 +1,9 @@
-# Zan Movie Channel Bot – FINAL FULL CODE (SYNTAX & LOGIC FIXED)
+# Zan Movie Channel Bot – FINAL FULL CODE (WITH /tharngal DASHBOARD + VIP AUTO-EXPIRY)
 # =====================================================
 # python-telegram-bot v20.8 compatible
 # Polling mode | Single instance safe
 # =====================================================
 
-"""
-REQUIREMENTS:
-  pip install -U python-telegram-bot==20.8
-"""
-
-# =====================================================
-# IMPORTS
-# =====================================================
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -27,11 +19,12 @@ import logging
 import sqlite3
 import hashlib
 from datetime import datetime, timedelta
+import asyncio
 
 # =====================================================
 # CONFIG
 # =====================================================
-BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0"   # 🔴 replace
+BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0"
 ADMIN_ID = 6445257462
 ADMIN_USERNAME = "lucus2252"
 VIP_CHANNEL_ID = -1003863175003
@@ -156,7 +149,7 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["method"] = method
 
     text = (
-        f"ငွေလွဲရန် (30000 MMK)\n\n"
+        "ငွေလွဲရန် (30000 MMK)\n\n"
         f"💳 {method} Pay\n\n"
         f"📱 ဖုန်း: {PAY_PHONE}\n"
         f"👤 အမည်: {PAY_NAME}\n\n"
@@ -265,12 +258,62 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_caption(q.message.caption + "\n\n🔴 ပယ်ချပြီး")
 
 # =====================================================
+# VIP AUTO-EXPIRY CHECK (every 10 minutes)
+# =====================================================
+async def vip_expiry_checker(app: Application):
+    while True:
+        now = datetime.utcnow()
+        cur.execute("SELECT user_id FROM users WHERE is_vip=1 AND vip_expiry IS NOT NULL AND vip_expiry < ?",
+                    (now.strftime("%Y-%m-%d %H:%M:%S"),))
+        expired = cur.fetchall()
+
+        for (uid,) in expired:
+            cur.execute("UPDATE users SET is_vip=0, vip_expiry=NULL WHERE user_id=?", (uid,))
+            conn.commit()
+            try:
+                await app.bot.send_message(uid, "⛔ VIP သက်တမ်းကုန်ဆုံးသွားပါပြီ။")
+            except:
+                pass
+
+        await asyncio.sleep(600)
+
+# =====================================================
+# /tharngal ADMIN DASHBOARD
+# =====================================================
+async def tharngal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='approved'")
+    total_sales = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='rejected'")
+    scam_count = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+    active_vip = cur.fetchone()[0]
+
+    text = (
+        "📊 ADMIN DASHBOARD (/tharngal)\n\n"
+        f"✅ အောင်မြင်သော VIP ဝယ်ယူမှု: {total_sales}\n"
+        f"❌ ပယ်ချထားသော / Scam: {scam_count}\n"
+        f"👑 Active VIP: {active_vip}"
+    )
+
+    await update.message.reply_text(text)
+
+# =====================================================
 # MAIN
 # =====================================================
+async def post_init(app: Application):
+    app.create_task(vip_expiry_checker(app))
+
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("tharngal", tharngal))
     app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
     app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
     app.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
