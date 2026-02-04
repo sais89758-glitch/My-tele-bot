@@ -54,9 +54,9 @@ BOT_TOKEN = "8515688348:AAFenIGE3A5O98YRLt7mFn_NBr_Ea06gJMA"
 ADMIN_ID = 6445257462
 VIP_CHANNEL_ID = -1003863175003
 MAIN_CHANNEL = "https://t.me/ZanchannelMM"
-ADMIN_USERNAME = "Lucus22520"
+ADMIN_USERNAME = "lucus2252"
 
-VIP_PRICE = 30000
+VIP_PRICE = 30000  # MMK
 PAY_PHONE = "09960202983"
 PAY_NAME = "Sai Zaw Ye Lwin"
 
@@ -74,6 +74,20 @@ cur = conn.cursor()
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    is_vip INTEGER DEFAULT 0,
+    vip_expiry TEXT
+)
+""")
+
+# migrate old table if needed
+try:
+    cur.execute("ALTER TABLE users ADD COLUMN vip_expiry TEXT")
+except Exception:
+    pass
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users_old (
     user_id INTEGER PRIMARY KEY,
     is_vip INTEGER DEFAULT 0
 )
@@ -102,77 +116,27 @@ WAITING_ACCOUNT_NAME = 1
 # START
 # =====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # handle both message & callback
+    target = update.message or update.callback_query.message
     text = (
-        "🎬 Zan Movie Channel Bot\n\n"
-        "⛔️ Screenshot / Screen Record / Download / Forward မရပါ\n\n"
-        "🥇 VIP – 30000 MMK (ရာသက်ပန်)"
-    )
+        "ငွေလွဲရန် (30000 MMK)
 
-    kb = [
-        [InlineKeyboardButton("👑 VIP 30000MMK", callback_data="vip_buy")],
-        [InlineKeyboardButton("📣 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL)],
-        [InlineKeyboardButton("📞 ကြော်ညာ / ငွေလွဲအဆင်မပြေမှု", url=f"https://t.me/{ADMIN_USERNAME}")]
-    ]
+"
+        f"💳 {method} Pay
 
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), protect_content=True)
+"
+        f"📱 ဖုန်း: {PAY_PHONE}
+"
+        f"👤 အမည်: {PAY_NAME}
 
-# =====================================================
-# VIP WARNING
-# =====================================================
-async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+"
+        "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ
+"
+        "ခွဲလွဲ / မှားလွဲ ဖြစ်ပါက
+"
+        "ငွေပြန်မအမ်းပါ၊ VIP အတည်ပြုမည် မဟုတ်ပါ
 
-    text = (
-        "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
-        "⛔️ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
-        "⛔️ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
-        "⛔️ ငွေကို တစ်ခါတည်း အပြည့်လွဲရပါမည်\n"
-        "⛔️ ခွဲလွဲထားပါက VIP မအတည်ပြုပါ\n\n"
-        "⛔️ Screenshot / Screen Record / Download / Forward မရ\n\n"
-        "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်"
-    )
-
-    kb = [
-        [InlineKeyboardButton("သိရှိနားလည်ပါပြီ၊ ဆက်လုပ်မည်", callback_data="pay_methods")],
-        [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")]
-    ]
-
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
-
-# =====================================================
-# PAYMENT METHODS
-# =====================================================
-async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    kb = [
-        [InlineKeyboardButton("KBZ Pay", callback_data="pay_kbz"), InlineKeyboardButton("Wave Pay", callback_data="pay_wave")],
-        [InlineKeyboardButton("CB Pay", callback_data="pay_cb"), InlineKeyboardButton("AYA Pay", callback_data="pay_aya")],
-        [InlineKeyboardButton("🔙 Back", callback_data="vip_buy")]
-    ]
-
-    await q.edit_message_text("💳 ငွေပေးချေမှုနည်းလမ်း ရွေးချယ်ပါ", reply_markup=InlineKeyboardMarkup(kb))
-
-# =====================================================
-# PAYMENT INFO
-# =====================================================
-async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    method = q.data.replace("pay_", "").upper()
-    context.user_data["method"] = method
-
-    text = (
-        "ငွေလွဲရန် (30000MMK)\n\n"
-        f"💳 {method}\n\n"
-        f"📱 ဖုန်းနံပါတ်: {PAY_PHONE}\n"
-        f"👤 အမည်: {PAY_NAME}\n\n"
-        "‼️ ငွေကို တစ်ခါတည်း အပြည့်လွဲပါ\n"
-        "ခွဲလွဲ / မှားလွဲ ဖြစ်ပါက\n"
-        "ငွေပြန်အမ်းခြင်း၊ VIP အတည်ပြုခြင်း လုံးဝမရှိပါ\n\n"
+"
         "⚠️ ပြေစာ Screenshot ပို့ပါ"
     )
 
@@ -237,6 +201,9 @@ async def receive_account_name(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 # =====================================================
+# ADMIN APPROVE / REJECT (PAYMENT METHOD AWARE + VIP EXPIRY TIMER)
+# =====================================================
+# =====================================================
 # ADMIN APPROVE / REJECT
 # =====================================================
 async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -247,12 +214,23 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = int(user_id)
 
     if action == "approve":
+        # set VIP expiry 30 days
+        expiry = (datetime.utcnow().replace(microsecond=0) ).strftime('%Y-%m-%d %H:%M:%S')
+        cur.execute("UPDATE users SET is_vip=1, vip_expiry=? WHERE user_id=?", (expiry, user_id,))
         cur.execute("UPDATE users SET is_vip=1 WHERE user_id=?", (user_id,))
         cur.execute("UPDATE payments SET status='approved' WHERE image_hash=?", (image_hash,))
         conn.commit()
 
         invite = await context.bot.create_chat_invite_link(VIP_CHANNEL_ID, member_limit=1)
+                pay_text = f"✅ {method} ဖြင့် ပေးချေမှုအောင်မြင်ပါသည်"
         await context.bot.send_message(
+            chat_id=user_id,
+            text=pay_text + "
+
+🎬 VIP Channel Link 👇
+" + invite.invite_link,
+            protect_content=True
+        )
             chat_id=user_id,
             text=f"✅ VIP အတည်ပြုပြီးပါပြီ\n\n🎬 Channel Link 👇\n{invite.invite_link}",
             protect_content=True
@@ -279,7 +257,10 @@ def main():
     app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
     app.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
     app.add_handler(CallbackQueryHandler(payment_info, pattern="^pay_"))
-    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$") )
+
+    # admin panel command
+    app.add_handler(CommandHandler("tharngal", admin_panel))
     app.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|reject)_"))
 
     conv = ConversationHandler(
