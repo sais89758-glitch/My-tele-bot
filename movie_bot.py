@@ -22,18 +22,17 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+# =====================================================
+# CONFIG (DIRECT VALUES)
+# =====================================================
 
-# ============================================================
-# ENV CONFIG (USE WHAT YOU GAVE)
-# ================= CONFIG =================
-# ⚠️ Direct values (NOT os.getenv)
-
-BOT_TOKEN = "8515688348:AAHKbL-alScUufoYbciwO-E3V4pKCRdHMVk"
+BOT_TOKEN = "8515688348:AAHkgGjz06M0BXBIqSuQzl2m_OFuUbakHAI"
 
 ADMIN_ID = 6445257462
 ADMIN_USERNAME = "Lucus22520"
 
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
+
 VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
 VIP_CHANNEL_ID = -1003863175003
 
@@ -41,6 +40,7 @@ VIP_PRICE = 30000
 
 PAY_PHONE = "09960202983"
 PAY_NAME = "Sai Zaw Ye Lwin"
+
 
 # ============================================================
 # LOGGING
