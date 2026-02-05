@@ -131,7 +131,8 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db(); cur = conn.cursor()
     cur.execute("INSERT INTO payments (user_id, method, account_name, status, created_at) VALUES (?,?,?,?,?)", (user_id, method, account_name, "PENDING", datetime.now().isoformat()))
     conn.commit(); conn.close()
-    await update.message.reply_text("Admin အား အကြောင်းကြားပြီးပါပြီ။")
+    await update.message.reply_text( "ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ။\n"
+        "Admin ထံမှ အမြန်ဆုံး အကြောင်းကြားပေးပါမည်။")
     kb = [[InlineKeyboardButton("✅ အတည်ပြုသည်", callback_data=f"approve_{user_id}")],[InlineKeyboardButton("❌ ငြင်းပယ်သည်", callback_data=f"reject_{user_id}")]]
     await context.bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=f"📌 New VIP Request\nUser ID: {user_id}\nMethod: {method}\nName: {account_name}", reply_markup=InlineKeyboardMarkup(kb))
     return ConversationHandler.END
