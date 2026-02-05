@@ -1,6 +1,6 @@
 # Zan Movie Channel Bot – FULL FINAL VERSION
 # Architect: System Architect & Senior Python Developer
-# Version: 3.0 (Custom Dashboard, Dynamic Payments, Video Ads)
+# Version: 3.2 (Custom Midnight Auto-Delete Logic)
 
 import logging
 import sqlite3
@@ -138,7 +138,14 @@ async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    kb = [[InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ")],[InlineKeyboardButton("Wave Pay", callback_data="pay_Wave")],[InlineKeyboardButton("AYA Pay", callback_data="pay_AYA")],[InlineKeyboardButton("CB Pay", callback_data="pay_CB")],[InlineKeyboardButton("Back", callback_data="back_home")]]
+    
+    kb = [
+        [InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ")],
+        [InlineKeyboardButton("Wave Pay", callback_data="pay_Wave")],
+        [InlineKeyboardButton("AYA Pay", callback_data="pay_AYA")],
+        [InlineKeyboardButton("CB Pay", callback_data="pay_CB")],
+        [InlineKeyboardButton("Back", callback_data="back_home")]
+    ]
     await query.message.edit_text("ငွေပေးချေမှုနည်းလမ်းရွေးပါ", reply_markup=InlineKeyboardMarkup(kb))
 
 async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +166,8 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if qr_id:
         await query.message.reply_photo(photo=qr_id, caption=text)
-        await query.message.delete() # Clean up old text message
+        try: await query.message.delete() 
+        except: pass
     else:
         await query.message.edit_text(text)
         
@@ -275,36 +283,39 @@ async def receive_ad_content(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data['ad_video'] = msg.video.file_id if msg.video else None
     context.user_data['ad_text'] = msg.caption if (msg.photo or msg.video) else msg.text
     
+    # Custom Midnight Buttons
     kb = [
-        [InlineKeyboardButton("၁ နာရီ", callback_data="adtime_3600"), InlineKeyboardButton("၆ နာရီ", callback_data="adtime_21600")],
-        [InlineKeyboardButton("၁ ရက်", callback_data="adtime_86400"), InlineKeyboardButton("၃ ရက်", callback_data="adtime_259200")],
-        [InlineKeyboardButton("မဖျက်ပါ", callback_data="adtime_0")]
+        [InlineKeyboardButton("မဖျက်ပါ", callback_data="adtime_0")],
+        [InlineKeyboardButton("ဒီည (00:00) တွင်ဖျက်မည်", callback_data="adtime_midnight_0")],
+        [InlineKeyboardButton("၁ ရက်အကြာ (00:00)", callback_data="adtime_midnight_1")],
+        [InlineKeyboardButton("၃ ရက်အကြာ (00:00)", callback_data="adtime_midnight_3")],
+        [InlineKeyboardButton("၇ ရက်အကြာ (00:00)", callback_data="adtime_midnight_7")],
     ]
     await msg.reply_text(
-        "⏰ ကြော်ညာကို အလိုအလျောက် ပြန်ဖျက်မည့်အချိန် ရွေးပါ\n\n"
-        "သို့မဟုတ် စိတ်ကြိုက်အချိန် ရိုက်ထည့်ပါ\n"
-        "(Example: 2h, 30m, 1d 5h)",
+        "⏰ ကြော်ညာကို မည်သည့်အချိန်တွင် အော်တိုဖျက်ပေးရမလဲ ရွေးချယ်ပါ။",
         reply_markup=InlineKeyboardMarkup(kb)
     )
     return WAITING_AD_TIME
 
 async def finalize_ad_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Determine input source (Button click or Text input)
     delete_seconds = 0
-    
+    msg_obj = None
+
     if update.callback_query:
         await update.callback_query.answer()
-        delete_seconds = int(update.callback_query.data.split("_")[1])
+        data = update.callback_query.data
         msg_obj = update.callback_query.message
-    else:
-        # Text input custom time
-        raw_text = update.message.text
-        parsed = parse_time_input(raw_text)
-        msg_obj = update.message
-        if parsed is None:
-            await update.message.reply_text("❌ အချိန်ပုံစံ မှားယွင်းနေသည်။ (Example: 1h, 30m, 1d)")
-            return WAITING_AD_TIME
-        delete_seconds = parsed
+        
+        if data.startswith("adtime_midnight_"):
+            days_offset = int(data.split("_")[2])
+            now = datetime.now()
+            # Calculate next midnight (Tonight 24:00)
+            next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            # Add offset days
+            target_time = next_midnight + timedelta(days=days_offset)
+            delete_seconds = int((target_time - now).total_seconds())
+        elif data.startswith("adtime_"):
+            delete_seconds = int(data.split("_")[1])
 
     # Get stored content
     photo = context.user_data.get('ad_photo')
@@ -322,7 +333,7 @@ async def finalize_ad_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
             
         success_msg = "✅ ကြော်ညာကို Main Channel ထံ ပို့လိုက်ပါပြီ။"
         if delete_seconds > 0:
-            human_time = str(timedelta(seconds=delete_seconds))
+            human_time = str(timedelta(seconds=delete_seconds)).split('.')[0] # Format H:M:S
             success_msg += f"\n(⏳ {human_time} ကြာလျှင် အော်တိုဖျက်ပါမည်)"
             
             async def auto_delete(seconds, msg_id):
@@ -333,16 +344,12 @@ async def finalize_ad_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
             
             asyncio.create_task(auto_delete(delete_seconds, sent_msg.message_id))
         
-        # Reply to admin
-        if update.callback_query:
+        if msg_obj:
             await msg_obj.edit_text(success_msg)
-        else:
-            await msg_obj.reply_text(success_msg)
             
     except Exception as e:
         err_text = f"❌ Error: {e}"
-        if update.callback_query: await msg_obj.edit_text(err_text)
-        else: await msg_obj.reply_text(err_text)
+        if msg_obj: await msg_obj.edit_text(err_text)
     
     return ConversationHandler.END
 
@@ -366,7 +373,8 @@ async def edit_payment_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     method = query.data.split("_")[1]
     context.user_data['edit_pay_method'] = method
-    await query.message.edit_text(f"📝 {method} အတွက် **QR Code** ပုံကို ပို့ပေးပါ။")
+    # Custom prompt
+    await query.message.edit_text(f"{method} ငွေလက်ခံ QRပုံ ကိုပို့ပေးပါ")
     return PAY_SET_QR
 
 async def receive_pay_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,13 +383,15 @@ async def receive_pay_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PAY_SET_QR
     context.user_data['edit_pay_qr'] = update.message.photo[-1].file_id
     method = context.user_data['edit_pay_method']
-    await update.message.reply_text(f"📱 {method} **ဖုန်းနံပါတ်** ကို ပို့ပေးပါ။")
+    # Custom prompt
+    await update.message.reply_text(f"{method} ငွေလက်ခံဖုန်းနံပါတ်ကိုပို့ပေးပါ")
     return PAY_SET_PHONE
 
 async def receive_pay_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['edit_pay_phone'] = update.message.text
     method = context.user_data['edit_pay_method']
-    await update.message.reply_text(f"👤 {method} **အကောင့်နာမည်** ကို ပို့ပေးပါ။")
+    # Custom prompt
+    await update.message.reply_text(f"{method} ‌ငွေလက်ခံနာမည်ကိုပို့ပေးပါ")
     return PAY_SET_NAME
 
 async def receive_pay_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -394,7 +404,8 @@ async def receive_pay_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("UPDATE payment_settings SET qr_id=?, phone=?, account_name=? WHERE method=?", (qr_id, phone, name, method))
     conn.commit(); conn.close()
     
-    await update.message.reply_text(f"✅ {method} အချက်အလက်များကို သိမ်းဆည်းလိုက်ပါပြီ။")
+    # Custom completion message
+    await update.message.reply_text("သိမ်းပြီးပါပြီ")
     return ConversationHandler.END
 
 
@@ -408,7 +419,6 @@ async def admin_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_stats":
         await admin_stats(update, context)
     elif data == "admin_ads":
-        # Handled by ConversationHandler entry point
         pass 
     elif data == "admin_pay_menu":
         await admin_pay_menu(update, context)
@@ -445,10 +455,7 @@ def main():
         entry_points=[CallbackQueryHandler(admin_ads_start, pattern="^admin_ads$")],
         states={
             WAITING_AD_CONTENT: [MessageHandler((filters.TEXT | filters.PHOTO | filters.VIDEO) & ~filters.COMMAND, receive_ad_content)],
-            WAITING_AD_TIME: [
-                CallbackQueryHandler(finalize_ad_broadcast, pattern="^adtime_"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_ad_broadcast)
-            ],
+            WAITING_AD_TIME: [CallbackQueryHandler(finalize_ad_broadcast, pattern="^adtime_")],
         },
         fallbacks=[CommandHandler("tharngal", admin_dashboard_menu)],
     )
@@ -477,7 +484,6 @@ def main():
     application.add_handler(CallbackQueryHandler(payment_info, pattern="^pay_"))
     application.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|reject)_"))
     
-    # General Admin Navigation
     application.add_handler(CallbackQueryHandler(admin_dispatch, pattern="^(back_admin_home|admin_stats|admin_pay_menu)$"))
     
     application.run_polling(drop_pending_updates=True)
