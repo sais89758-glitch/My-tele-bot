@@ -1,5 +1,5 @@
 # Zan Movie Channel Bot – ENHANCED VERSION
-# Fixed: Back Buttons, Visual UI, and QR Fetching Logic
+# Fixed: Admin QR Upload Flow and State Transitions
 
 import logging
 import sqlite3
@@ -106,7 +106,7 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     res = cur.fetchone()
     conn.close()
     
-    qr_id, phone, name = res if res else (None, "N/A", "N/A")
+    qr_id, phone, name = res if res else (None, "09960202983", "Sai Zaw Ye Lwin")
 
     text = (
         f"<b>ငွေလွဲရန် ({VIP_PRICE} MMK)</b>\n\n"
@@ -121,10 +121,8 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     kb = [[InlineKeyboardButton("🔙 Back", callback_data="pay_methods")]]
     
-    # QR ပုံရှိလျှင် တွဲပို့မည်၊ မရှိလျှင် စာသားသာပို့မည်
     if qr_id:
         try:
-            # အရင်စာကိုဖျက်ပြီး ပုံအသစ်ပို့သည် (ပိုသပ်ရပ်စေရန်)
             await query.message.delete()
             await context.bot.send_photo(
                 chat_id=query.message.chat_id, 
@@ -183,8 +181,11 @@ async def admin_dashboard_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("💳 Payment ပြင်ဆင်ရန်", callback_data="admin_pay_menu")],
     ]
     text = "🛠 <b>Admin Dashboard</b>\n\nလုပ်ဆောင်လိုသည့် Menu ကို ရွေးချယ်ပါ။"
-    if update.callback_query: await update.callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-    else: await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+    if update.callback_query: 
+        await update.callback_query.answer()
+        await update.callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+    else: 
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
 # ================= ADMIN ADS FLOW =================
 async def admin_ads_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -242,27 +243,29 @@ async def finalize_ad_broadcast(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ================= ADMIN PAYMENT SETTINGS FLOW =================
 async def admin_pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     kb = [[InlineKeyboardButton(f"{m} Pay", callback_data=f"editpay_{m}")] for m in ['KBZ', 'Wave', 'AYA', 'CB']]
     kb.append([InlineKeyboardButton("🔙 Back", callback_data="back_admin_home")])
     await update.callback_query.message.edit_text("ပြင်ဆင်လိုသော Payment ရွေးပါ:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def edit_payment_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     method = update.callback_query.data.split("_")[1]
     context.user_data['edit_method'] = method
-    await update.callback_query.message.edit_text(f"[{method}] အတွက် QR ပုံ အသစ်ပို့ပေးပါ။")
+    await update.callback_query.message.edit_text(f"💳 [{method} Pay] အတွက် QR ပုံ အသစ်ပို့ပေးပါ။")
     return PAY_SET_QR
 
 async def receive_pay_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("QR ပုံ ပို့ပေးပါ။")
+        await update.message.reply_text("⚠️ QR ပုံ (Image) သာ ပို့ပေးပါ။")
         return PAY_SET_QR
     context.user_data['edit_qr'] = update.message.photo[-1].file_id
-    await update.message.reply_text("ဖုန်းနံပါတ် အသစ်ပို့ပေးပါ။")
+    await update.message.reply_text("📱 ဖုန်းနံပါတ် အသစ်ပို့ပေးပါ။")
     return PAY_SET_PHONE
 
 async def receive_pay_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['edit_phone'] = update.message.text
-    await update.message.reply_text("အကောင့်နာမည် အသစ်ပို့ပေးပါ။")
+    await update.message.reply_text("👤 အကောင့်နာမည် အသစ်ပို့ပေးပါ။")
     return PAY_SET_NAME
 
 async def receive_pay_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -274,11 +277,12 @@ async def receive_pay_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = get_db(); cur = conn.cursor()
     cur.execute("UPDATE payment_settings SET qr_id=?, phone=?, account_name=? WHERE method=?", (qr_id, phone, name, method))
     conn.commit(); conn.close()
-    await update.message.reply_text("✅ <b>အချက်အလက်များ ပြင်ဆင်ပြီးပါပြီ။</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("OK", callback_data="back_admin_home")]]))
+    await update.message.reply_text(f"✅ <b>{method} Pay အတွက် အချက်အလက်များ ပြင်ဆင်ပြီးပါပြီ။</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("OK", callback_data="back_admin_home")]]))
     return ConversationHandler.END
 
 # ================= STATS & ACTIONS =================
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM payments WHERE status='APPROVED'")
     all_inc = cur.fetchone()[0] * VIP_PRICE
@@ -294,6 +298,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_admin_home")]]))
 
 async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     action, user_id = update.callback_query.data.split("_")
     user_id = int(user_id)
     conn = get_db(); cur = conn.cursor()
@@ -313,15 +318,17 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # User Flow
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(payment_info, pattern="^pay_")],
         states={
-            WAITING_SLIP: [MessageHandler(filters.PHOTO, receive_slip), CallbackQueryHandler(payment_methods, pattern="^pay_methods$")],
+            WAITING_SLIP: [MessageHandler(filters.PHOTO, receive_slip)],
             WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)]
         },
-        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(start, pattern="^back_home$")]
+        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(payment_methods, pattern="^pay_methods$")]
     ))
     
+    # Admin Ads Flow
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(admin_ads_start, pattern="^admin_ads$")],
         states={
@@ -331,6 +338,7 @@ def main():
         fallbacks=[CommandHandler("tharngal", admin_dashboard_menu)]
     ))
 
+    # Admin Pay Edit Flow - ပုံတင်တဲ့အပိုင်းကို filter.PHOTO သေချာစစ်ထားပါတယ်
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_payment_start, pattern="^editpay_")],
         states={
@@ -338,7 +346,7 @@ def main():
             PAY_SET_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_pay_phone)],
             PAY_SET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_pay_name)],
         },
-        fallbacks=[CommandHandler("tharngal", admin_dashboard_menu)]
+        fallbacks=[CommandHandler("tharngal", admin_dashboard_menu), CallbackQueryHandler(admin_pay_menu, pattern="^admin_pay_menu$")]
     ))
 
     app.add_handler(CommandHandler("start", start))
