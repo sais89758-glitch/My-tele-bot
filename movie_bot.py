@@ -1,6 +1,6 @@
 # Zan Movie Channel Bot – FULL FINAL VERSION
 # Architect: System Architect & Senior Python Developer
-# Version: 2.8 (Admin Custom Auto-Delete Ad Features)
+# Version: 2.9 (Updated VIP Channel Link)
 
 import logging
 import sqlite3
@@ -28,7 +28,8 @@ PAY_NAME = "Sai Zaw Ye Lwin"
 # Links & IDs
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
 MAIN_CHANNEL_ID = "@ZanchannelMM" 
-VIP_CHANNEL_URL = "https://t.me/c/3863175003/1"
+# Updated VIP Channel Link as requested
+VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
 
 # ================= LOGGING SETUP =================
 logging.basicConfig(
@@ -83,7 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
     )
     keyboard = [
-        [InlineKeyboardButton("👑 VIP ဝင်ရန်-30000MMK", callback_data="vip_buy")],
+        [InlineKeyboardButton("👑 VIP ဝင်ရန်", callback_data="vip_buy")],
         [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)],
     ]
     if update.callback_query:
@@ -132,7 +133,7 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("INSERT INTO payments (user_id, method, account_name, status, created_at) VALUES (?,?,?,?,?)", (user_id, method, account_name, "PENDING", datetime.now().isoformat()))
     conn.commit(); conn.close()
     
-    # Updated Success Message for User
+    # Success Message for User
     success_text = (
         "ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ။\n"
         "Admin ထံမှ အမြန်ဆုံး အကြောင်းကြားပေးပါမည်။"
@@ -156,6 +157,7 @@ async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)", (user_id, expiry))
         cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
         conn.commit()
+        # Message with updated VIP Channel URL
         await context.bot.send_message(user_id, "✅ VIP အတည်ပြုပြီးပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🍿 VIP Channel ဝင်ရန်", url=VIP_CHANNEL_URL)]]))
         await query.edit_message_caption(caption=query.message.caption + "\n\n✅ Approved")
     elif action == "reject":
