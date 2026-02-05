@@ -27,13 +27,15 @@ from telegram.ext import (
 # ENV CONFIG (USE WHAT YOU GAVE)
 # ============================================================
 
-BOT_TOKEN = os.getenv("8515688348:AAHKbL-alScUufoYbciwO-E3V4pKCRdHMVk")
-ADMIN_ID = int(os.getenv("6445257462"))
-ADMIN_USERNAME = os.getenv("Lucus22520")
+import os
 
-MAIN_CHANNEL_URL = os.getenv("https://t.me/ZanchannelMM")
-VIP_CHANNEL_URL = os.getenv("https://t.me/+bDFiZZ9gwRRjY2M1")
-VIP_CHANNEL_ID = int(os.getenv("-1003863175003"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+
+MAIN_CHANNEL_URL = os.getenv("MAIN_CHANNEL_URL")
+VIP_CHANNEL_URL = os.getenv("VIP_CHANNEL_URL")
+VIP_CHANNEL_ID = int(os.getenv("VIP_CHANNEL_ID"))
 
 VIP_PRICE = 30000
 PAY_PHONE = "09960202983"
