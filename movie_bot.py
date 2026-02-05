@@ -84,7 +84,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
     )
     keyboard = [
-        [InlineKeyboardButton("👑 VIP ဝင်ရန်", callback_data="vip_buy")],
+        [InlineKeyboardButton("👑 VIP ဝင်ရန်-30000MMK", callback_data="vip_buy")],
         [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)],
     ]
     if update.callback_query:
