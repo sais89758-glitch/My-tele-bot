@@ -178,6 +178,7 @@ async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+         "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
         "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
         "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
         "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
@@ -319,17 +320,7 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Back to Home", callback_data="back_home")],
     ]
 
-    if query:
-        await query.message.edit_text("🛠 Admin Dashboard", reply_markup=InlineKeyboardMarkup(kb))
-    else:
-        await update.message.reply_text("🛠 Admin Dashboard", reply_markup=InlineKeyboardMarkup(kb))
-
-async def tharngal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    await admin_dashboard(update, context)
-
-async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+   async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -340,22 +331,49 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
     cur = conn.cursor()
 
     if action == "ok":
-        expiry = (datetime.now() + timedelta(days=30)).isoformat()
-        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)", (user_id, expiry))
-        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
+        expiry_dt = datetime.now() + timedelta(days=30)
+        expiry = expiry_dt.isoformat()
+
+        # VIP status update
+        cur.execute(
+            "INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)",
+            (user_id, expiry)
+        )
+        cur.execute(
+            "UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'",
+            (user_id,)
+        )
         conn.commit()
 
         try:
+            # 🔐 Single-use invite link (1 user only)
+            invite = await context.bot.create_chat_invite_link(
+                chat_id=VIP_CHANNEL_ID,
+                name=f"vip_{user_id}",
+                member_limit=1,
+                expire_date=expiry_dt
+            )
+            invite_link = invite.invite_link
+
             await context.bot.send_message(
                 chat_id=user_id,
                 text="✅ ငွေပေးချေမှု အောင်မြင်ပါသည်။ VIP Member ဖြစ်ပါပြီ။",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("VIP Channel ဝင်ရန်", url=VIP_CHANNEL_URL)]])
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("VIP Channel ဝင်ရန်", url=invite_link)]
+                ])
             )
-            await query.edit_message_caption(query.message.caption + "\n\n✅ APPROVED")
+
+            await query.edit_message_caption(
+                query.message.caption + "\n\n✅ APPROVED"
+            )
         except:
             pass
+
     else:
-        cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (user_id,))
+        cur.execute(
+            "UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'",
+            (user_id,)
+        )
         conn.commit()
 
         try:
@@ -363,10 +381,14 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
                 chat_id=user_id,
                 text="❌ ငွေပေးချေမှု မအောင်မြင်ပါ။ (ငွေမဝင်ခြင်း သို့မဟုတ် အချက်အလက်မှားယွင်းခြင်း)"
             )
-            await query.edit_message_caption(query.message.caption + "\n\n❌ REJECTED")
+            await query.edit_message_caption(
+                query.message.caption + "\n\n❌ REJECTED"
+            )
         except:
             pass
+
     conn.close()
+
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
