@@ -41,7 +41,7 @@ VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
 
 # ⚠️ အရေးကြီးသည် - ဤနေရာတွင် VIP Channel ID ကို ထည့်ပါ (ဥပမာ -1001234567890)
 # Bot သည် ထို Channel တွင် Admin ဖြစ်နေရပါမည်။
-VIP_CHANNEL_ID = -100xxxxxxxxxx 
+VIP_CHANNEL_ID =-1003863175003
 
 # Default Values
 DEFAULT_PRICE = 10000 # MMK
