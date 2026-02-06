@@ -107,6 +107,16 @@ def init_db():
     )
     """)
 
+    # --- MIGRATION FIX: Rename old keys to uppercase (Wave -> WAVE) ---
+    try:
+        cur.execute("UPDATE payment_settings SET method='WAVE' WHERE method='Wave'")
+        cur.execute("UPDATE payment_settings SET method='AYA' WHERE method='Aya'")
+        cur.execute("UPDATE payment_settings SET method='CB' WHERE method='Cb'")
+        conn.commit()
+    except Exception as e:
+        pass # Ignore if already correct or constraint failed
+    # ------------------------------------------------------------------
+
     # Initialize Default Payment Methods if not exists
     for m in ["KBZ", "WAVE", "AYA", "CB"]:
         cur.execute("INSERT OR IGNORE INTO payment_settings(method, phone, name) VALUES (?, ?, ?)", 
