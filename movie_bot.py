@@ -36,10 +36,15 @@ MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
 # ကြော်ညာ Post တင်ရန်အတွက် Channel Username (Bot သည် Admin ဖြစ်ရမည်)
 CHANNEL_USERNAME = "@ZanchannelMM" 
 
+# VIP Channel Link (Fallback အနေဖြင့်သာ ထားသည်)
 VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
 
+# ⚠️ အရေးကြီးသည် - ဤနေရာတွင် VIP Channel ID ကို ထည့်ပါ (ဥပမာ -1001234567890)
+# Bot သည် ထို Channel တွင် Admin ဖြစ်နေရပါမည်။
+VIP_CHANNEL_ID = -100xxxxxxxxxx 
+
 # Default Values
-DEFAULT_PRICE = 10000
+DEFAULT_PRICE = 10000 # MMK
 DEFAULT_PHONE = "09960202983"
 DEFAULT_NAME = "Sai Zaw Ye Lwin"
 
@@ -178,7 +183,7 @@ async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
-         "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
+        "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
         "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
         "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
         "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
@@ -320,6 +325,16 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Back to Home", callback_data="back_home")],
     ]
 
+    if query:
+        await query.message.edit_text("🛠 Admin Dashboard", reply_markup=InlineKeyboardMarkup(kb))
+    else:
+        await update.message.reply_text("🛠 Admin Dashboard", reply_markup=InlineKeyboardMarkup(kb))
+
+async def tharngal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await admin_dashboard(update, context)
+
 async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -331,49 +346,40 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
     cur = conn.cursor()
 
     if action == "ok":
-        expiry_dt = datetime.now() + timedelta(days=30)
-        expiry = expiry_dt.isoformat()
-
-        # VIP status update
-        cur.execute(
-            "INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)",
-            (user_id, expiry)
-        )
-        cur.execute(
-            "UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'",
-            (user_id,)
-        )
+        expiry = (datetime.now() + timedelta(days=30)).isoformat()
+        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)", (user_id, expiry))
+        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
         conn.commit()
 
+        # ==========================================================
+        # ONE-TIME LINK GENERATION (Modified)
+        # ==========================================================
         try:
-            # 🔐 Single-use invite link (1 user only)
-            invite = await context.bot.create_chat_invite_link(
-                chat_id=VIP_CHANNEL_ID,
-                name=f"vip_{user_id}",
+            # VIP Channel အတွက် လူတစ်ယောက်သာဝင်နိုင်သော Link အသစ်ထုတ်ပေးခြင်း
+            # member_limit=1 သည် တစ်ယောက်ဝင်ပြီးပါက Link ကို Expire ဖြစ်စေသည်
+            invite_link_obj = await context.bot.create_chat_invite_link(
+                chat_id=VIP_CHANNEL_ID, 
                 member_limit=1,
-                expire_date=expiry_dt
+                name=f"VIP Access for {user_id}" 
             )
-            invite_link = invite.invite_link
-
+            final_invite_link = invite_link_obj.invite_link
+        except Exception as e:
+            log.error(f"Error creating invite link: {e}")
+            # Error ဖြစ်လျှင် Static Link ကိုသာ အသုံးပြုမည် (သို့မဟုတ် Admin ကိုသတိပေးသင့်သည်)
+            final_invite_link = VIP_CHANNEL_URL
+        
+        try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text="✅ ငွေပေးချေမှု အောင်မြင်ပါသည်။ VIP Member ဖြစ်ပါပြီ။",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("VIP Channel ဝင်ရန်", url=invite_link)]
-                ])
+                text="✅ ငွေပေးချေမှု အောင်မြင်ပါသည်။ VIP Member ဖြစ်ပါပြီ။\n\n(ဤ Link သည် တစ်ခါနှိပ်ပြီးပါက သက်တမ်းကုန်သွားပါမည်။ သူများအား Forward လုပ်ခြင်းမပြုပါနှင့်)",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("VIP Channel ဝင်ရန်", url=final_invite_link)]])
             )
-
-            await query.edit_message_caption(
-                query.message.caption + "\n\n✅ APPROVED"
-            )
-        except Exception:
-            pass
+            await query.edit_message_caption(query.message.caption + "\n\n✅ APPROVED")
+        except Exception as e:
+            log.error(f"Error sending msg to user: {e}")
 
     else:
-        cur.execute(
-            "UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'",
-            (user_id,)
-        )
+        cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (user_id,))
         conn.commit()
 
         try:
@@ -381,15 +387,10 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
                 chat_id=user_id,
                 text="❌ ငွေပေးချေမှု မအောင်မြင်ပါ။ (ငွေမဝင်ခြင်း သို့မဟုတ် အချက်အလက်မှားယွင်းခြင်း)"
             )
-            await query.edit_message_caption(
-                query.message.caption + "\n\n❌ REJECTED"
-            )
-        except Exception:
+            await query.edit_message_caption(query.message.caption + "\n\n❌ REJECTED")
+        except:
             pass
-
     conn.close()
-
-
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -407,8 +408,59 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.close()
 
-    text = f"📊 ဝင်ငွေစာရင်း\n\n📅 ယနေ့: {today_income} MMK\n💰 စုစုပေါင်း: {total_income} MMK"
-    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="admin_dashboard")]]))
+    # --- ဤအပိုင်းကို stats function ထဲတွင် အစားထိုးရန် ---
+    
+    now = datetime.now()
+    today_date = now.date().isoformat()
+    this_month = now.strftime("%Y-%m")
+
+    # 1. ဝင်ငွေ အကျဉ်းချုပ် တွက်ချက်ခြင်း
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (today_date,))
+    today_income = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND created_at LIKE ?", (f"{this_month}%",))
+    month_income = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED'")
+    total_income = cur.fetchone()[0] or 0
+
+    # 2. VIP အခြေအနေ တွက်ချက်ခြင်း
+    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+    total_vips = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='REJECTED'")
+    rejected_count = cur.fetchone()[0] or 0
+
+    # 3. နေ့ရက်အလိုက် ဝင်ငွေ (နောက်ဆုံး ၇ ရက်စာ)
+    daily_stats = ""
+    for i in range(6, -1, -1):
+        d = (now - timedelta(days=i)).date()
+        cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (d.isoformat(),))
+        d_income = cur.fetchone()[0] or 0
+        daily_stats += f"{d.strftime('%m-%d')} : {d_income} MMK\n"
+
+    conn.close()
+
+    # သင်အလိုရှိသော ပုံစံအတိုင်း စာသားပြင်ဆင်ခြင်း
+    text = (
+        "📊 **Admin Dashboard (အုပ်ချုပ်သူ မျက်နှာပြင်)**\n"
+        "💰 **ဝင်ငွေ အကျဉ်းချုပ်**\n\n"
+        f"ယနေ့ ဝင်ငွေ : {today_income} MMK\n"
+        f"ယခုလ ဝင်ငွေ : {month_income} MMK\n"
+        f"စုစုပေါင်း ဝင်ငွေ : {total_income} MMK\n\n"
+        "👥 **ယနေ့ VIP အခြေအနေ**\n"
+        f"VIP စုစုပေါင်း : {total_vips} ယောက်\n"
+        f"Rejected (ငွေလွဲမအောင်မြင် / ပယ်ချထား) : {rejected_count} ယောက်\n\n"
+        "📅 **နေ့ရက်အလိုက် ဝင်ငွေ စာရင်း (လစဉ်)**\n\n"
+        f"{daily_stats}"
+    )
+
+    await query.message.edit_text(
+        text, 
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="admin_dashboard")]])
+    )
+    # --- အစားထိုးမှု ပြီးဆုံး ---
 
 # --- ADS SCHEDULER ---
 
