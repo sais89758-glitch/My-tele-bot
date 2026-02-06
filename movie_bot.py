@@ -36,7 +36,7 @@ ADMIN_ID = 6445257462
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
 VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
 
-# Default Values (Admin panel မှမပြင်ရသေးခင် သုံးမည့်အချက်အလက်များ)
+# Default Values (မိတ်ဆွေတောင်းဆိုထားသည့်အတိုင်း ပြင်ဆင်ထားပါသည်)
 DEFAULT_PRICE = 30000
 DEFAULT_PHONE = "09960202983"
 DEFAULT_NAME = "Sai Zaw Ye Lwin"
@@ -82,7 +82,7 @@ def init_db():
     )
     """)
 
-    # Payment Settings (Admin က ပြင်နိုင်ရန်)
+    # Payment Settings (Admin က ပြင်နိုင်ရန် - QR column ထားသော်လည်း မသုံးတော့ပါ)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS payment_settings (
         method TEXT PRIMARY KEY,
@@ -114,13 +114,17 @@ def init_db():
         cur.execute("UPDATE payment_settings SET method='CB' WHERE method='Cb'")
         conn.commit()
     except Exception as e:
-        pass # Ignore if already correct or constraint failed
+        pass 
     # ------------------------------------------------------------------
 
-    # Initialize Default Payment Methods if not exists
+    # Initialize or Update Default Payment Methods
+    # တောင်းဆိုထားသည့်အတိုင်း ဖုန်းနံပါတ်နှင့် နာမည်ကို ၄ ခုလုံးအတွက် အတည်ပြုထည့်သွင်းခြင်း
     for m in ["KBZ", "WAVE", "AYA", "CB"]:
-        cur.execute("INSERT OR IGNORE INTO payment_settings(method, phone, name) VALUES (?, ?, ?)", 
-                    (m, DEFAULT_PHONE, DEFAULT_NAME))
+        # အရင်ရှိပြီးသားဖြစ်နေလည်း ဖုန်းနဲ့နာမည်ကို တောင်းဆိုထားတဲ့အတိုင်း Update လုပ်ပေးမည်
+        cur.execute("""
+            INSERT INTO payment_settings(method, phone, name) VALUES (?, ?, ?)
+            ON CONFLICT(method) DO UPDATE SET phone=excluded.phone, name=excluded.name
+        """, (m, DEFAULT_PHONE, DEFAULT_NAME))
 
     conn.commit()
     conn.close()
@@ -137,7 +141,8 @@ WAITING_NAME = 2
 AD_MEDIA = 10
 AD_DAYS = 11
 AD_INTERVAL = 12
-PAY_QR = 20
+
+# Admin Payment Edit States (QR ဖြုတ်လိုက်သဖြင့် PAY_QR မလိုတော့ပါ)
 PAY_PHONE = 21
 PAY_NAME_EDIT = 22
 
@@ -198,6 +203,7 @@ async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # ၄ ခုလုံးရအောင် လုပ်ထားပါသည်
     keyboard = [
         [InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ")],
         [InlineKeyboardButton("Wave Pay", callback_data="pay_WAVE")],
@@ -221,17 +227,18 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Fetch updated info from DB
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-    cur.execute("SELECT qr, phone, name FROM payment_settings WHERE method=?", (method,))
+    cur.execute("SELECT phone, name FROM payment_settings WHERE method=?", (method,))
     row = cur.fetchone()
     conn.close()
 
-    qr_code = row[0] if row else None
-    ph_num = row[1] if row and row[1] else DEFAULT_PHONE
-    acc_name = row[2] if row and row[2] else DEFAULT_NAME
+    # QR မပါတော့ပါ၊ ဖုန်းနှင့် နာမည်သာ ယူပါမည်
+    ph_num = row[0] if row and row[0] else DEFAULT_PHONE
+    acc_name = row[1] if row and row[1] else DEFAULT_NAME
 
+    # "Pay" စာသားဖြုတ်ပြီး Method နာမည်သီးသန့်ပြခြင်း၊ QR ဖြုတ်ခြင်း
     text = (
         f"ငွေလွဲရန် ({DEFAULT_PRICE} MMK)\n\n"
-        f"💳 {method} Pay\n"
+        f"💳 {method}\n"
         f"📱 ဖုန်း: `{ph_num}`\n"
         f"👤 အမည်: {acc_name}\n\n"
         "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ\n"
@@ -240,17 +247,8 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ ပြေစာ Screenshot ပို့ပါ"
     )
 
-    # If QR exists, send photo, else edit text
-    if qr_code:
-        # Delete previous menu to send photo
-        await query.message.delete()
-        await query.message.chat.send_photo(
-            photo=qr_code,
-            caption=text,
-            parse_mode="Markdown"
-        )
-    else:
-        await query.message.edit_text(text, parse_mode="Markdown")
+    # QR ပုံမပို့တော့ပါ၊ စာသားသာ Edit လုပ်ပါမည်
+    await query.message.edit_text(text, parse_mode="Markdown")
 
     return WAITING_SLIP
 
@@ -539,29 +537,21 @@ async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-async def pay_qr_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def pay_phone_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # QR တောင်းသည့်အဆင့်ကို ဖြုတ်ပြီး ဖုန်းနံပါတ် တန်းတောင်းပါသည်
     query = update.callback_query
     await query.answer()
     context.user_data["edit_method"] = query.data.split("_")[1]
     
     await query.message.delete()
-    await query.message.chat.send_message("📸 QR Code ပုံပို့ပေးပါ (မရှိလျှင် /skip ဟုရိုက်ပါ)")
-    return PAY_QR
-
-async def pay_qr_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        context.user_data["new_qr"] = update.message.photo[-1].file_id
-    else:
-        context.user_data["new_qr"] = None # No QR update or removed
-        
-    await update.message.reply_text("📱 ဖုန်းနံပါတ် ရိုက်ထည့်ပါ (မပြင်လိုပါက /skip ဟုရိုက်ပါ)")
+    await query.message.chat.send_message("📱 ဖုန်းနံပါတ် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုပါက /skip ဟုရိုက်ပါ)")
     return PAY_PHONE
 
 async def pay_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     context.user_data["new_phone"] = text if text != "/skip" else None
     
-    await update.message.reply_text("👤 အကောင့်နာမည် ရိုက်ထည့်ပါ (မပြင်လိုပါက /skip ဟုရိုက်ပါ)")
+    await update.message.reply_text("👤 အကောင့်နာမည် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုပါက /skip ဟုရိုက်ပါ)")
     return PAY_NAME_EDIT
 
 async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -569,15 +559,12 @@ async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = text if text != "/skip" else None
     
     method = context.user_data["edit_method"]
-    new_qr = context.user_data.get("new_qr")
     new_phone = context.user_data.get("new_phone")
 
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     
-    # Update logic: only update fields that are provided
-    if new_qr:
-        cur.execute("UPDATE payment_settings SET qr=? WHERE method=?", (new_qr, method))
+    # Update logic: QR update မပါတော့ပါ
     if new_phone:
         cur.execute("UPDATE payment_settings SET phone=? WHERE method=?", (new_phone, method))
     if new_name:
@@ -631,9 +618,9 @@ def main():
 
     # 3. Admin Conversation (Edit Payment)
     pay_edit_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(pay_qr_ask, pattern="^edit_")],
+        # QR မမေးတော့ဘဲ Phone တန်းမေးသည့် function ကို ချိတ်ပေးထားပါသည်
+        entry_points=[CallbackQueryHandler(pay_phone_ask, pattern="^edit_")],
         states={
-            PAY_QR: [MessageHandler(filters.PHOTO, pay_qr_save), CommandHandler("skip", pay_qr_save)],
             PAY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_phone_save), CommandHandler("skip", pay_phone_save)],
             PAY_NAME_EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_name_save), CommandHandler("skip", pay_name_save)],
         },
