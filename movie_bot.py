@@ -31,12 +31,14 @@ from telegram.ext import (
 BOT_TOKEN = "8515688348:AAHkgGjz06M0BXBIqSuQzl2m_OFuUbakHAI"
 
 ADMIN_ID = 6445257462
-# ADMIN_ID = 123456789 # စမ်းသပ်ရန် မိမိ ID ထည့်ပါ (လိုအပ်လျှင်)
 
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
+# ကြော်ညာ Post တင်ရန်အတွက် Channel Username (Bot သည် Admin ဖြစ်ရမည်)
+CHANNEL_USERNAME = "@ZanchannelMM" 
+
 VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
 
-# Default Values (မိတ်ဆွေတောင်းဆိုထားသည့်အတိုင်း ပြင်ဆင်ထားပါသည်)
+# Default Values
 DEFAULT_PRICE = 30000
 DEFAULT_PHONE = "09960202983"
 DEFAULT_NAME = "Sai Zaw Ye Lwin"
@@ -82,7 +84,7 @@ def init_db():
     )
     """)
 
-    # Payment Settings (Admin က ပြင်နိုင်ရန် - QR column ထားသော်လည်း မသုံးတော့ပါ)
+    # Payment Settings
     cur.execute("""
     CREATE TABLE IF NOT EXISTS payment_settings (
         method TEXT PRIMARY KEY,
@@ -107,7 +109,7 @@ def init_db():
     )
     """)
 
-    # --- MIGRATION FIX: Rename old keys to uppercase (Wave -> WAVE) ---
+    # --- MIGRATION FIX ---
     try:
         cur.execute("UPDATE payment_settings SET method='WAVE' WHERE method='Wave'")
         cur.execute("UPDATE payment_settings SET method='AYA' WHERE method='Aya'")
@@ -118,9 +120,7 @@ def init_db():
     # ------------------------------------------------------------------
 
     # Initialize or Update Default Payment Methods
-    # တောင်းဆိုထားသည့်အတိုင်း ဖုန်းနံပါတ်နှင့် နာမည်ကို ၄ ခုလုံးအတွက် အတည်ပြုထည့်သွင်းခြင်း
     for m in ["KBZ", "WAVE", "AYA", "CB"]:
-        # အရင်ရှိပြီးသားဖြစ်နေလည်း ဖုန်းနဲ့နာမည်ကို တောင်းဆိုထားတဲ့အတိုင်း Update လုပ်ပေးမည်
         cur.execute("""
             INSERT INTO payment_settings(method, phone, name) VALUES (?, ?, ?)
             ON CONFLICT(method) DO UPDATE SET phone=excluded.phone, name=excluded.name
@@ -142,7 +142,7 @@ AD_MEDIA = 10
 AD_DAYS = 11
 AD_INTERVAL = 12
 
-# Admin Payment Edit States (QR ဖြုတ်လိုက်သဖြင့် PAY_QR မလိုတော့ပါ)
+# Admin Payment Edit States
 PAY_PHONE = 21
 PAY_NAME_EDIT = 22
 
@@ -189,8 +189,9 @@ async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ဆက်လက်လုပ်ဆောင်မလား?"
     )
 
+    # BUG FIX: "pay_methods" changed to "choose_payment" to avoid conflict with "pay_" regex
     keyboard = [
-        [InlineKeyboardButton("ဆက်လက်လုပ်ဆောင်မည်", callback_data="pay_methods")],
+        [InlineKeyboardButton("ဆက်လက်လုပ်ဆောင်မည်", callback_data="choose_payment")],
         [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")],
     ]
 
@@ -203,7 +204,7 @@ async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # ၄ ခုလုံးရအောင် လုပ်ထားပါသည်
+    # "Pay" စာသားပြန်ထည့်ထားပါသည်
     keyboard = [
         [InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ")],
         [InlineKeyboardButton("Wave Pay", callback_data="pay_WAVE")],
@@ -231,14 +232,13 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = cur.fetchone()
     conn.close()
 
-    # QR မပါတော့ပါ၊ ဖုန်းနှင့် နာမည်သာ ယူပါမည်
     ph_num = row[0] if row and row[0] else DEFAULT_PHONE
     acc_name = row[1] if row and row[1] else DEFAULT_NAME
 
-    # "Pay" စာသားဖြုတ်ပြီး Method နာမည်သီးသန့်ပြခြင်း၊ QR ဖြုတ်ခြင်း
+    # "Pay" စာသားပြန်ထည့်ထားပါသည်
     text = (
         f"ငွေလွဲရန် ({DEFAULT_PRICE} MMK)\n\n"
-        f"💳 {method}\n"
+        f"💳 {method} Pay\n"
         f"📱 ဖုန်း: `{ph_num}`\n"
         f"👤 အမည်: {acc_name}\n\n"
         "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ\n"
@@ -247,7 +247,6 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ ပြေစာ Screenshot ပို့ပါ"
     )
 
-    # QR ပုံမပို့တော့ပါ၊ စာသားသာ Edit လုပ်ပါမည်
     await query.message.edit_text(text, parse_mode="Markdown")
 
     return WAITING_SLIP
@@ -454,7 +453,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("Back", callback_data="admin_dashboard")]]
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
-# --- ADS LOGIC ---
+# --- ADS LOGIC (Scheduler Added) ---
 
 async def ads_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -518,6 +517,40 @@ async def ads_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+# Background Job to Send Ads
+async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    now = datetime.now()
+    
+    # Select active ads that are due
+    cur.execute("SELECT id, media_type, file_id, caption, interval_hours, end_at FROM ads WHERE active=1 AND next_post <= ?", (now.isoformat(),))
+    ads = cur.fetchall()
+    
+    for ad in ads:
+        ad_id, m_type, f_id, cap, interval, end_str = ad
+        
+        # Send Ad to Channel
+        try:
+            if m_type == "photo":
+                await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=f_id, caption=cap)
+            elif m_type == "video":
+                await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=f_id, caption=cap)
+        except Exception as e:
+            log.error(f"Ad send failed: {e}")
+            
+        # Update Next Post time
+        next_time = now + timedelta(hours=interval)
+        end_time = datetime.fromisoformat(end_str)
+        
+        if now >= end_time:
+            cur.execute("UPDATE ads SET active=0 WHERE id=?", (ad_id,))
+        else:
+            cur.execute("UPDATE ads SET next_post=? WHERE id=?", (next_time.isoformat(), ad_id))
+            
+    conn.commit()
+    conn.close()
+
 # --- PAYMENT SETTINGS EDIT ---
 
 async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -525,10 +558,10 @@ async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     kb = [
-        [InlineKeyboardButton("KBZ Pay", callback_data="edit_KBZ")],
-        [InlineKeyboardButton("Wave Pay", callback_data="edit_WAVE")],
-        [InlineKeyboardButton("AYA Pay", callback_data="edit_AYA")],
-        [InlineKeyboardButton("CB Pay", callback_data="edit_CB")],
+        [InlineKeyboardButton("KBZ", callback_data="edit_KBZ")],
+        [InlineKeyboardButton("Wave", callback_data="edit_WAVE")],
+        [InlineKeyboardButton("AYA", callback_data="edit_AYA")],
+        [InlineKeyboardButton("CB", callback_data="edit_CB")],
         [InlineKeyboardButton("Back", callback_data="admin_dashboard")],
     ]
 
@@ -538,7 +571,6 @@ async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def pay_phone_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # QR တောင်းသည့်အဆင့်ကို ဖြုတ်ပြီး ဖုန်းနံပါတ် တန်းတောင်းပါသည်
     query = update.callback_query
     await query.answer()
     context.user_data["edit_method"] = query.data.split("_")[1]
@@ -564,7 +596,6 @@ async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     
-    # Update logic: QR update မပါတော့ပါ
     if new_phone:
         cur.execute("UPDATE payment_settings SET phone=? WHERE method=?", (new_phone, method))
     if new_name:
@@ -593,6 +624,11 @@ def main():
     # Create the Application
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # --- JOB QUEUE (For Ads) ---
+    job_queue = app.job_queue
+    # 1 မိနစ်တစ်ခါ ကြော်ညာချိန်စစ်မည်
+    job_queue.run_repeating(post_ads_job, interval=60, first=10)
+
     # --- HANDLERS ---
 
     # 1. User Conversation (Slip Upload)
@@ -618,7 +654,6 @@ def main():
 
     # 3. Admin Conversation (Edit Payment)
     pay_edit_conv = ConversationHandler(
-        # QR မမေးတော့ဘဲ Phone တန်းမေးသည့် function ကို ချိတ်ပေးထားပါသည်
         entry_points=[CallbackQueryHandler(pay_phone_ask, pattern="^edit_")],
         states={
             PAY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_phone_save), CommandHandler("skip", pay_phone_save)],
@@ -637,7 +672,8 @@ def main():
 
     # General Callbacks
     app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
-    app.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
+    # Match the new callback data pattern "choose_payment"
+    app.add_handler(CallbackQueryHandler(payment_methods, pattern="^choose_payment$"))
     app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
     
     # Admin Callbacks
