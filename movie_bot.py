@@ -320,7 +320,7 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Back to Home", callback_data="back_home")],
     ]
 
-   async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -366,7 +366,7 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_caption(
                 query.message.caption + "\n\n✅ APPROVED"
             )
-        except:
+        except Exception:
             pass
 
     else:
@@ -384,10 +384,11 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_caption(
                 query.message.caption + "\n\n❌ REJECTED"
             )
-        except:
+        except Exception:
             pass
 
     conn.close()
+
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
