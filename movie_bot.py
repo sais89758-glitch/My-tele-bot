@@ -87,9 +87,10 @@ def init_db():
 # STATES
 # =====================================================
 WAITING_SLIP, WAITING_NAME, WAITING_REF = range(3)
-# =================================================
+
+# =====================================================
 # USER SIDE
-# =================================================
+# =====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🎬 Zan Movie Channel Bot\n\n"
@@ -117,22 +118,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.edit_text(text, reply_markup=markup)
 
 async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
+    query = update.callback_query
+    await query.answer()
 
-   text = (
-    "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
-    "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
-    "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
-    "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
-    "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
-    "ဆက်လက်လုပ်ဆောင်မလား?"
-)
+    text = (
+        "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+        "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
+        "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
+        "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
+        "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
+        "ဆက်လက်လုပ်ဆောင်မလား?"
+    )
+
     kb = [
         [InlineKeyboardButton("ဆက်လုပ်မည်", callback_data="choose_payment")],
         [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")]
     ]
 
-    await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
 async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -167,10 +173,10 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = row[1] if row else DEFAULT_NAME
 
     text = (
-        f"{method} Pay\n"
-        f"Phone: {phone}\n"
-        f"Name: {name}\n\n"
-        "Screenshot ပို့ပါ"
+        f"💳 {method} Pay\n"
+        f"📱 ဖုန်း: {phone}\n"
+        f"👤 အမည်: {name}\n\n"
+        "⚠️ ပြေစာ Screenshot ပို့ပါ"
     )
 
     await query.message.edit_text(text)
@@ -178,16 +184,16 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("Screenshot ပို့ပါ")
+        await update.message.reply_text("⚠️ Screenshot ပို့ပါ")
         return WAITING_SLIP
 
     context.user_data["slip"] = update.message.photo[-1].file_id
-    await update.message.reply_text("ငွေလွဲသူအမည် ပို့ပါ")
+    await update.message.reply_text("👤 ငွေလွဲသူအမည် ပို့ပါ")
     return WAITING_NAME
 
 async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["account_name"] = update.message.text
-    await update.message.reply_text("Referral Code ရှိရင်ထည့်ပါ (မရှိရင် skip)")
+    await update.message.reply_text("Referral Code ရှိရင်ထည့်ပါ (မရှိရင် Skip)")
     return WAITING_REF
 
 async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,7 +217,7 @@ async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text("Admin ထံပို့ပြီးပါပြီ")
+    await update.message.reply_text("✅ Admin ထံ ပို့ပြီးပါပြီ")
     return ConversationHandler.END
 
 # =====================================================
@@ -222,15 +228,21 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     kb = [
-        [InlineKeyboardButton("Stats", callback_data="stats")],
-        [InlineKeyboardButton("Back", callback_data="back_home")]
+        [InlineKeyboardButton("📊 Stats", callback_data="stats")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_home")]
     ]
 
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.message.edit_text("Admin Dashboard", reply_markup=InlineKeyboardMarkup(kb))
+        await update.callback_query.message.edit_text(
+            "🛠 Admin Dashboard",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
     else:
-        await update.message.reply_text("Admin Dashboard", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text(
+            "🛠 Admin Dashboard",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_NAME)
@@ -242,8 +254,10 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     await update.callback_query.message.edit_text(
-        f"Total Income: {total} MMK",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="admin_dashboard")]])
+        f"💰 Total Income: {total} MMK",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Back", callback_data="admin_dashboard")]]
+        )
     )
 
 # =====================================================
@@ -265,14 +279,15 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tharngal", admin_dashboard))
-
     app.add_handler(user_conv)
+
     app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
     app.add_handler(CallbackQueryHandler(payment_methods, pattern="^choose_payment$"))
     app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
     app.add_handler(CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
 
+    print("Bot Started...")
     app.run_polling()
 
 if __name__ == "__main__":
