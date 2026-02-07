@@ -87,30 +87,34 @@ def init_db():
 # STATES
 # =====================================================
 WAITING_SLIP, WAITING_NAME, WAITING_REF = range(3)
-
-# =====================================================
+# =================================================
 # USER SIDE
-# =====================================================
+# =================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-   text = (
-    "🎬 Zan Movie Channel Bot\n\n"
-    "⛔ Screenshot (SS) မရ\n"
-    "⛔ Screen Record မရ\n"
-    "⛔ Download / Save / Forward မရ\n\n"
-    "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
-)
+    text = (
+        "🎬 Zan Movie Channel Bot\n\n"
+        "⛔ Screenshot (SS) မရ\n"
+        "⛔ Screen Record မရ\n"
+        "⛔ Download / Save / Forward မရ\n\n"
+        "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
+    )
+
     kb = [
-        [InlineKeyboardButton(f"VIP ဝင်ရန် ({DEFAULT_PRICE} MMK)", callback_data="vip_buy")],
-        [InlineKeyboardButton("Channel သို့ဝင်ရန်", url=MAIN_CHANNEL_URL)]
+        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် ({DEFAULT_PRICE} MMK)", callback_data="vip_buy")],
+        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL_URL)],
     ]
 
     if update.effective_user.id == ADMIN_ID:
-        kb.append([InlineKeyboardButton("Admin Dashboard", callback_data="admin_dashboard")])
+        kb.append(
+            [InlineKeyboardButton("🛠 Admin Dashboard", callback_data="admin_dashboard")]
+        )
+
+    markup = InlineKeyboardMarkup(kb)
 
     if update.message:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
-    else:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text(text, reply_markup=markup)
+    elif update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=markup)
 
 async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
