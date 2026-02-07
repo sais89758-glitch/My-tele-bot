@@ -84,8 +84,16 @@ PAY_PHONE, PAY_NAME_EDIT = range(30, 32)
 # ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = "🎬 Zan Movie Channel Bot\n\n📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
-    keyboard = [[InlineKeyboardButton(f"👑 VIP ဝင်ရန် ({DEFAULT_PRICE} MMK)", callback_data="vip_buy")]]
+    text = (
+        "🎬 Zan Movie Channel Bot\n\n"
+        "⛔ Screenshot (SS) မရ\n"
+        "⛔ Screen Record မရ\n"
+        "⛔ Download / Save / Forward မရ\n\n"
+        "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
+   keyboard = [
+        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် ({DEFAULT_PRICE} MMK)", callback_data="vip_buy")],
+        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL_URL)],
+    ]
     if update.effective_user.id == ADMIN_ID:
         keyboard.append([InlineKeyboardButton("🛠 Admin Dashboard", callback_data="admin_dashboard")])
     
@@ -98,7 +106,12 @@ async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     keyboard = [[InlineKeyboardButton("ဆက်လက်လုပ်ဆောင်မည်", callback_data="choose_payment")], [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")]]
-    await query.message.edit_text("⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ...\n\nဆက်လက်လုပ်ဆောင်မလား?", reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.message.edit_text(""⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+        "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
+        "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
+        "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
+        "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
+        "ဆက်လက်လုပ်ဆောင်မလား?"", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
