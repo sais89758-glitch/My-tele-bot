@@ -1,379 +1,755 @@
-# Zan Movie Channel Bot – FINAL ERROR-FREE VERSION
-# Features: VIP Flow, Ads System, Referral System, Payment Management
+# ============================================================
+# Zan Movie Channel Bot – COMPLETE VERSION WITH REFERRAL SYSTEM
+# python-telegram-bot v20+
+# ============================================================
 
+import os
 import logging
 import sqlite3
-import asyncio
+import calendar
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     CallbackQueryHandler,
-    ContextTypes,
+    MessageHandler,
     ConversationHandler,
+    ContextTypes,
     filters,
 )
 
-# ================= CONFIGURATION =================
-BOT_TOKEN = "8515688348:AAH45NOcsGPPD9UMyc43u8zDLLnlKS8eGs0" 
-ADMIN_ID = 6445257462
-VIP_PRICE = 30000
+# =====================================================
+# CONFIGURATION
+# =====================================================
 
-# Links & IDs
+# မိမိ Bot Token
+BOT_TOKEN = "8515688348:AAHkgGjz06M0BXBIqSuQzl2m_OFuUbakHAI"
+
+# Admin Telegram ID
+ADMIN_ID = 6445257462
+
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
-MAIN_CHANNEL_ID = "@ZanchannelMM" 
-VIP_CHANNEL_URL = "https://t.me/+bDFiZZ9gwRRjY2M1"
+# ကြော်ညာ Post တင်ရန်အတွက် Channel Username (Bot သည် Admin ဖြစ်ရမည်)
+CHANNEL_USERNAME = "@ZanchannelMM" 
+
+# VIP Channel ID (Bot သည် Channel တွင် Add Members လုပ်ပိုင်ခွင့်ရှိသော Admin ဖြစ်ရမည်)
+VIP_CHANNEL_ID = -1003863175003
+
+# Default Values
+DEFAULT_PRICE = 10000 
+DEFAULT_PHONE = "09960202983"
+DEFAULT_NAME = "Sai Zaw Ye Lwin"
+
 DB_NAME = "movie_bot.db"
 
-# ================= LOGGING SETUP =================
+# ============================================================
+# LOGGING
+# ============================================================
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger("ZanMovieBot")
 
-# ================= DATABASE SETUP =================
+# ============================================================
+# DATABASE INIT
+# ============================================================
+
 def init_db():
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
+
+    # Users Table
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        is_vip INTEGER DEFAULT 0,
+        vip_expiry TEXT
+    )
+    """)
+
+    # Payments History Table (Updated with ref_code)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        method TEXT,
+        account_name TEXT,
+        amount INTEGER,
+        status TEXT,
+        created_at TEXT,
+        ref_code TEXT
+    )
+    """)
     
-    cur.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, is_vip INTEGER DEFAULT 0, vip_expiry TEXT)")
-    cur.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, method TEXT, account_name TEXT, status TEXT, created_at TEXT, referral_code TEXT)")
-    cur.execute("CREATE TABLE IF NOT EXISTS payment_settings (method TEXT PRIMARY KEY, qr_id TEXT, phone TEXT, account_name TEXT)")
-    cur.execute("CREATE TABLE IF NOT EXISTS inviters (code TEXT PRIMARY KEY, name TEXT, total_count INTEGER DEFAULT 0, month_count INTEGER DEFAULT 0, last_month TEXT)")
-    cur.execute("CREATE TABLE IF NOT EXISTS ads (id INTEGER PRIMARY KEY AUTOINCREMENT, media_type TEXT, file_id TEXT, caption TEXT, total_days INTEGER, interval_hours INTEGER, next_post TEXT, end_at TEXT, active INTEGER DEFAULT 1)")
+    # Existing Table Update Check: Add ref_code column if not exists
+    try:
+        cur.execute("ALTER TABLE payments ADD COLUMN ref_code TEXT")
+    except sqlite3.OperationalError:
+        pass # Column already exists
 
-    methods = ['KBZ', 'Wave', 'AYA', 'CB']
-    for m in methods:
-        cur.execute("INSERT OR IGNORE INTO payment_settings (method, phone, account_name) VALUES (?, ?, ?)", (m, "09960202983", "Sai Zaw Ye Lwin"))
-    
-    conn.commit(); conn.close()
+    # Payment Settings
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS payment_settings (
+        method TEXT PRIMARY KEY,
+        qr TEXT,
+        phone TEXT,
+        name TEXT
+    )
+    """)
 
-init_db()
+    # Ads Table
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS ads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        media_type TEXT,
+        file_id TEXT,
+        caption TEXT,
+        total_days INTEGER,
+        interval_hours INTEGER,
+        next_post TEXT,
+        end_at TEXT,
+        active INTEGER
+    )
+    """)
 
-def get_db():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    # Inviters (Referral) Table
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS inviters (
+        code TEXT PRIMARY KEY,
+        name TEXT,
+        total_count INTEGER DEFAULT 0,
+        monthly_count INTEGER DEFAULT 0,
+        last_month TEXT
+    )
+    """)
 
-# ================= STATES =================
-WAITING_SLIP, WAITING_NAME, WAITING_REF_CHOICE, WAITING_REF_CODE = range(4)
-WAITING_AD_CONTENT, WAITING_AD_TIME = range(4, 6)
-PAY_SET_QR, PAY_SET_PHONE, PAY_SET_NAME = range(6, 9)
-INVITER_CODE, INVITER_NAME = range(9, 11)
+    # --- MIGRATION: နာမည်ဟောင်းများကို အကြီးစာလုံးပြောင်းရန် ---
+    try:
+        cur.execute("UPDATE payment_settings SET method='WAVE' WHERE method='Wave'")
+        cur.execute("UPDATE payment_settings SET method='AYA' WHERE method='Aya'")
+        cur.execute("UPDATE payment_settings SET method='CB' WHERE method='Cb'")
+        conn.commit()
+    except Exception:
+        pass 
 
-# ================= START & HOME =================
+    # Default Payment Methods အချက်အလက်များထည့်သွင်းခြင်း
+    for m in ["KBZ", "WAVE", "AYA", "CB"]:
+        cur.execute("""
+            INSERT INTO payment_settings(method, phone, name) VALUES (?, ?, ?)
+            ON CONFLICT(method) DO UPDATE SET phone=excluded.phone, name=excluded.name
+        """, (m, DEFAULT_PHONE, DEFAULT_NAME))
+
+    conn.commit()
+    conn.close()
+
+# ============================================================
+# STATES DEFINITION
+# ============================================================
+
+# User Side States
+WAITING_SLIP = 1
+WAITING_NAME = 2
+WAITING_REF = 3  # New state for Referral Code
+
+# Admin Side States (Ads)
+AD_MEDIA = 10
+AD_DAYS = 11
+AD_INTERVAL = 12
+
+# Admin Side States (Add Inviter)
+INVITER_CODE = 30
+INVITER_NAME = 31
+
+# Admin Payment Edit States
+PAY_PHONE = 21
+PAY_NAME_EDIT = 22
+
+# ============================================================
+# 1. USER SIDE LOGIC
+# ============================================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🎬 <b>Zan Movie Channel Bot</b>\n\n"
-        "⛔️ Screenshot (SS) မရ\n"
-        "⛔️ Screen Record မရ\n"
-        "⛔️ Download / Save / Forward မရ\n\n"
+        "🎬 Zan Movie Channel Bot\n\n"
+        "⛔ Screenshot (SS) မရ\n"
+        "⛔ Screen Record မရ\n"
+        "⛔ Download / Save / Forward မရ\n\n"
         "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
     )
-    keyboard = [
-        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် - {VIP_PRICE} MMK", callback_data="vip_buy")],
-        [InlineKeyboardButton("📢 Channel ဝင်ရန်", url=MAIN_CHANNEL_URL)],
-    ]
-    if update.callback_query:
-        await update.callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-    else:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ================= USER VIP PURCHASE FLOW =================
-async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    text = (
-        "⚠️ <b>ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ</b>\n\n"
-        "⛔️ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
-        "⛔️ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
-        "⛔️ ငွေကို တစ်ခါတည်း အပြည့်လွဲရပါမည်\n\n"
-        "သိရှိနားလည်ပါက ဆက်လုပ်ပါ"
-    )
-    kb = [
-        [InlineKeyboardButton("✅ ဆက်လက်လုပ်ဆောင်မည်", callback_data="pay_methods")],
-        [InlineKeyboardButton("❌ မဝယ်တော့ပါ", callback_data="back_home")]
+    keyboard = [
+        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် ({DEFAULT_PRICE} MMK)", callback_data="vip_buy")],
+        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL_URL)],
     ]
-    await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+
+    # Admin ဖြစ်လျှင် Dashboard ခလုတ်ပြရန်
+    if update.effective_user.id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton("🛠 Admin Dashboard", callback_data="admin_dashboard")])
+
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    text = (
+        "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+        "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
+        "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
+        "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
+        "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
+        "ဆက်လက်လုပ်ဆောင်မလား?"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("ဆက်လက်လုပ်ဆောင်မည်", callback_data="choose_payment")],
+        [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")],
+    ]
+
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    kb = [[InlineKeyboardButton(f"💳 {m} Pay", callback_data=f"pay_{m}")] for m in ['KBZ', 'Wave', 'AYA', 'CB']]
-    kb.append([InlineKeyboardButton("🔙 Back", callback_data="back_home")])
-    await query.message.edit_text("<b>ငွေပေးချေမှုနည်းလမ်းရွေးပါ</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        [InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ")],
+        [InlineKeyboardButton("Wave Pay", callback_data="pay_WAVE")],
+        [InlineKeyboardButton("AYA Pay", callback_data="pay_AYA")],
+        [InlineKeyboardButton("CB Pay", callback_data="pay_CB")],
+        [InlineKeyboardButton("Back", callback_data="back_home")],
+    ]
+
+    await query.message.edit_text(
+        "ငွေပေးချေမှုနည်းလမ်း ရွေးပါ",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
+    query = update.callback_query
+    await query.answer()
+
     method = query.data.replace("pay_", "")
     context.user_data["method"] = method
 
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT qr_id, phone, account_name FROM payment_settings WHERE method=?", (method,))
-    res = cur.fetchone()
+    # DB မှ အချက်အလက်ယူခြင်း
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT phone, name FROM payment_settings WHERE method=?", (method,))
+    row = cur.fetchone()
     conn.close()
-    
-    qr_id, phone, name = res if res else (None, "N/A", "N/A")
+
+    ph_num = row[0] if row and row[0] else DEFAULT_PHONE
+    acc_name = row[1] if row and row[1] else DEFAULT_NAME
 
     text = (
-        f"<b>ငွေလွဲရန် ({VIP_PRICE} MMK)</b>\n\n"
+        f"ငွေလွဲရန် ({DEFAULT_PRICE} MMK)\n\n"
         f"💳 {method} Pay\n"
-        f"📱 ဖုန်း: {phone}\n"
-        f"👤 အမည်: {name}\n\n"
-        "‼️ <b>တစ်ကြိမ်ထဲ အပြည့်လွဲပါ</b>\n"
+        f"📱 ဖုန်း: `{ph_num}`\n"
+        f"👤 အမည်: {acc_name}\n\n"
+        "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ\n"
         "ခွဲလွဲ / မှားလွဲပါက\n"
         "ငွေပြန်မအမ်း / VIP မအတည်ပြုပါ\n\n"
-        "⚠️ <b>ပြေစာ Screenshot ပို့ပါ</b>"
+        "⚠️ ပြေစာ Screenshot ပို့ပါ"
     )
-    
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="pay_methods")]]
-    
-    if qr_id:
-        try:
-            await query.message.delete()
-            await context.bot.send_photo(chat_id=query.message.chat_id, photo=qr_id, caption=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-        except:
-            await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-    else:
-        await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-        
+
+    await query.message.edit_text(text, parse_mode="Markdown")
+
     return WAITING_SLIP
 
 async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("⚠️ <b>ဓာတ်ပုံ (Screenshot) သာ ပို့ပေးပါ။</b>", parse_mode="HTML")
+        await update.message.reply_text("ပြေစာ Screenshot ပို့ပါ")
         return WAITING_SLIP
-    context.user_data["slip_file"] = update.message.photo[-1].file_id
-    await update.message.reply_text("👤 <b>ငွေလွဲသူအကောင့်နာမည်ကို ရိုက်ပို့ပေးပါ။</b>", parse_mode="HTML")
+
+    context.user_data["slip"] = update.message.photo[-1].file_id
+    await update.message.reply_text("ငွေလွဲသူအကောင့်နာမည် (သို့) Last 4 Digits ပို့ပါ")
     return WAITING_NAME
 
 async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["account_name"] = update.message.text
-    kb = [
-        [InlineKeyboardButton("✅ ရှိသည်", callback_data="ref_yes")],
-        [InlineKeyboardButton("❌ မရှိပါ", callback_data="ref_no")]
-    ]
-    await update.message.reply_text("🤝 <b>ဖိတ်ခေါ်ကုဒ် (Referral Code) ရှိပါသလား?</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-    return WAITING_REF_CHOICE
+    name = update.message.text
+    context.user_data["pay_name"] = name
+    
+    # Referral Code မေးခြင်း
+    keyboard = [[InlineKeyboardButton("မရှိပါ (Skip)", callback_data="skip_ref")]]
+    await update.message.reply_text(
+        "👤 Agent/Referral Code ရှိပါက ရိုက်ထည့်ပေးပါ။\n(မရှိပါက Skip ကိုနှိပ်ပါ)",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return WAITING_REF
 
-async def referral_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    if query.data == "ref_yes":
-        await query.message.edit_text("🔢 <b>ကုဒ်နံပါတ် (ဥပမာ - 25413) ကို ရိုက်ပို့ပေးပါ။</b>", parse_mode="HTML")
-        return WAITING_REF_CODE
-    else:
-        return await finalize_request(update, context, referral_code=None)
+async def skip_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    return await finalize_payment(update, context, ref_code=None)
 
-async def receive_referral_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text.strip()
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT code FROM inviters WHERE code=?", (code,))
+async def receive_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ref_code = update.message.text.strip()
+    
+    # Code စစ်ဆေးခြင်း
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM inviters WHERE code=?", (ref_code,))
     result = cur.fetchone()
     conn.close()
-    
-    if not result:
-        await update.message.reply_text("❌ <b>Code မှားယွင်းနေပါသည်။</b>\n(ပြန်လည် ရိုက်ထည့်ပေးပါ)", parse_mode="HTML")
-        return WAITING_REF_CODE
-    
-    return await finalize_request(update, context, referral_code=code)
 
-async def finalize_request(update: Update, context: ContextTypes.DEFAULT_TYPE, referral_code):
-    user_id = update.effective_user.id
-    username = update.effective_user.username or "N/A"
-    method = context.user_data.get("method")
-    account_name = context.user_data.get("account_name")
-    slip_file = context.user_data.get("slip_file")
-    final_ref_code = referral_code if referral_code else "-"
-    
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("INSERT INTO payments (user_id, method, account_name, status, created_at, referral_code) VALUES (?,?,?,?,?,?)", 
-                (user_id, method, account_name, "PENDING", datetime.now().isoformat(), final_ref_code))
-    conn.commit(); conn.close()
-    
-    msg_text = "✅ <b>Admin ထံသို့ ပို့လိုက်ပါပြီ။ ခေတ္တစောင့်ဆိုင်းပေးပါ။</b>"
-    if update.callback_query:
-        await update.callback_query.message.edit_text(msg_text, parse_mode="HTML")
+    if result:
+        await update.message.reply_text(f"✅ Agent code '{ref_code}' ({result[0]}) ကို အသုံးပြုထားသည်။")
+        return await finalize_payment(update, context, ref_code=ref_code)
     else:
-        await update.message.reply_text(msg_text, parse_mode="HTML")
-    
-    admin_text = (
-        f"🔔 <b>New VIP Request</b>\n\n"
-        f"👤 ID: <code>{user_id}</code>\n"
-        f"📛 User: @{username}\n"
-        f"💳 Method: {method}\n"
-        f"📝 Name: {account_name}\n"
-        f"🤝 Code: {final_ref_code}" 
+        keyboard = [[InlineKeyboardButton("မရှိပါ (Skip)", callback_data="skip_ref")]]
+        await update.message.reply_text(
+            "❌ Code မှားယွင်းနေပါသည်။ ပြန်ရိုက်ပါ သို့မဟုတ် Skip လုပ်ပါ။",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return WAITING_REF
+
+async def finalize_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, ref_code):
+    user = update.effective_user
+    method = context.user_data.get("method", "Unknown")
+    slip = context.user_data.get("slip")
+    name = context.user_data.get("pay_name")
+
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO payments (user_id, method, account_name, amount, status, created_at, ref_code) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user.id, method, name, DEFAULT_PRICE, "PENDING", datetime.now().isoformat(), ref_code)
     )
-    kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"approve_{user_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user_id}")]]
-    await context.bot.send_photo(chat_id=ADMIN_ID, photo=slip_file, caption=admin_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+    conn.commit()
+    conn.close()
+
+    # Message ပို့ခြင်း (Callback သို့မဟုတ် Message ကနေလာနိုင်လို့ check ရသည်)
+    if update.callback_query:
+        await update.callback_query.message.edit_text("✅ Admin ထံသို့ ပို့ပြီးပါပြီ။ ခေတ္တစောင့်ဆိုင်းပေးပါ။")
+    else:
+        await update.message.reply_text("✅ Admin ထံသို့ ပို့ပြီးပါပြီ။ ခေတ္တစောင့်ဆိုင်းပေးပါ။")
+
+    # Admin ထံ ပို့မည့်ခလုတ်များ
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ လက်ခံမည်", callback_data=f"admin_ok_{user.id}")],
+        [InlineKeyboardButton("❌ ငြင်းပယ်မည်", callback_data=f"admin_fail_{user.id}")]
+    ])
+
+    ref_text = f"\n🔖 Ref Code: `{ref_code}`" if ref_code else ""
+
+    try:
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=slip,
+            caption=(
+                "🔔 **VIP Payment Request**\n\n"
+                f"User ID: `{user.id}`\n"
+                f"Username: @{user.username}\n"
+                f"Method: {method}\n"
+                f"Name: {name}\n"
+                f"Amount: {DEFAULT_PRICE}{ref_text}"
+            ),
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        log.error(f"Admin ထံ ပေးစာပို့ရန် မအောင်မြင်ပါ: {e}")
+
     return ConversationHandler.END
 
-# ================= ADMIN ACTIONS =================
-async def admin_dashboard_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+# ============================================================
+# 2. ADMIN SIDE LOGIC
+# ============================================================
+
+async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    query = update.callback_query
+    if query: 
+        await query.answer()
+    
     kb = [
-        [InlineKeyboardButton("📊 စာရင်းနှင့် ဝင်ငွေ", callback_data="admin_stats")],
-        [InlineKeyboardButton("🤝 ဖိတ်ခေါ်သူစာရင်း", callback_data="admin_inviters")],
-        [InlineKeyboardButton("📢 ကြော်ညာတင်ရန်", callback_data="admin_ads")],
-        [InlineKeyboardButton("💳 Payment ပြင်ဆင်ရန်", callback_data="admin_pay_menu")],
+        [InlineKeyboardButton("📊 ဝင်ငွေစာရင်း (Stats)", callback_data="stats")],
+        [InlineKeyboardButton("➕ Agent အသစ်ထည့်ရန်", callback_data="add_inviter")],
+        [InlineKeyboardButton("📢 ကြော်ညာတင်ရန်", callback_data="ads")],
+        [InlineKeyboardButton("💳 Payment ပြင်ရန်", callback_data="pay_menu")],
+        [InlineKeyboardButton("Back to Home", callback_data="back_home")],
     ]
-    text = "🛠 <b>Admin Dashboard</b>"
-    if update.callback_query: 
-        await update.callback_query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-    else: 
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
-    vip_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM payments WHERE status='APPROVED'")
-    total_sales = cur.fetchone()[0]
-    total_revenue = total_sales * VIP_PRICE
-    conn.close()
-    
-    text = (
-        "📊 <b>Statistics</b>\n\n"
-        f"👥 Total VIPs: {vip_count}\n"
-        f"💰 Total Revenue: {total_revenue:,} MMK"
-    )
-    await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_admin_home")]]))
+    text = "🛠 **Admin Dashboard**\nလုပ်ဆောင်လိုရာ ရွေးချယ်ပါ။"
+    if query:
+        await query.message.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    else:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
 
-async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    action, user_id = query.data.split("_")
-    user_id = int(user_id)
+async def tharngal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await admin_dashboard(update, context)
+
+# --- ADD INVITER FLOW ---
+async def add_inviter_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_text("🔤 Agent အတွက် Code သတ်မှတ်ပေးပါ (ဥပမာ: AGENT01)")
+    return INVITER_CODE
+
+async def save_inviter_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["new_inv_code"] = update.message.text.strip()
+    await update.message.reply_text("👤 Agent နာမည် ရိုက်ထည့်ပါ")
+    return INVITER_NAME
+
+async def save_inviter_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = context.user_data["new_inv_code"]
+    name = update.message.text.strip()
     
-    conn = get_db(); cur = conn.cursor()
-    if action == "approve":
-        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
-        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip) VALUES (?, 1)", (user_id,))
-        
-        # Handle referral count if exists
-        cur.execute("SELECT referral_code FROM payments WHERE user_id=? AND status='APPROVED' ORDER BY id DESC LIMIT 1", (user_id,))
-        ref_res = cur.fetchone()
-        if ref_res and ref_res[0] != "-":
-            cur.execute("UPDATE inviters SET total_count = total_count + 1, month_count = month_count + 1 WHERE code=?", (ref_res[0],))
-        
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    try:
+        cur.execute("INSERT INTO inviters (code, name, total_count, monthly_count, last_month) VALUES (?, ?, 0, 0, ?)", 
+                    (code, name, datetime.now().strftime("%Y-%m")))
         conn.commit()
-        await query.message.edit_caption("✅ <b>Approved! User is now VIP.</b>", parse_mode="HTML")
+        await update.message.reply_text(f"✅ Agent {name} ({code}) ကို ထည့်သွင်းပြီးပါပြီ။", 
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="admin_dashboard")]]))
+    except sqlite3.IntegrityError:
+        await update.message.reply_text(f"❌ Code '{code}' က ရှိပြီးသား ဖြစ်နေသည်။",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="admin_dashboard")]]))
+    conn.close()
+    return ConversationHandler.END
+
+# --- PAYMENT APPROVAL WITH REFERRAL LOGIC ---
+async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    action, user_id = query.data.split("_")[1:]
+    user_id = int(user_id)
+
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    if action == "ok":
+        expiry = (datetime.now() + timedelta(days=30)).isoformat()
+        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?, 1, ?)", (user_id, expiry))
+        
+        # 1. Update Payment Status
+        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
+        
+        # 2. Handle Referral Logic (Update Count)
+        cur.execute("SELECT ref_code FROM payments WHERE user_id=? AND status='APPROVED' ORDER BY id DESC LIMIT 1", (user_id,))
+        res = cur.fetchone()
+        
+        if res and res[0]:
+            ref_code = res[0]
+            current_month = datetime.now().strftime("%Y-%m")
+            
+            # Get current stats for inviter
+            cur.execute("SELECT monthly_count, last_month FROM inviters WHERE code=?", (ref_code,))
+            inv_data = cur.fetchone()
+            
+            if inv_data:
+                m_count, last_m = inv_data
+                
+                # Check for month reset
+                if last_m != current_month:
+                    m_count = 0 # Reset count for new month
+                
+                # Increment counts
+                cur.execute("""
+                    UPDATE inviters 
+                    SET total_count = total_count + 1, 
+                        monthly_count = ?, 
+                        last_month = ? 
+                    WHERE code=?
+                """, (m_count + 1, current_month, ref_code))
+                log.info(f"Referral counted for {ref_code}")
+
+        conn.commit()
+
         try:
-            invite_link = await context.bot.create_chat_invite_link(chat_id=MAIN_CHANNEL_ID, member_limit=1)
-            await context.bot.send_message(chat_id=user_id, text=f"🎉 <b>VIP အတည်ပြုပြီးပါပြီ။</b>\n\nChannel သို့ဝင်ရန်: {invite_link.invite_link}", parse_mode="HTML")
+            # One-Time Invite Link ထုတ်ခြင်း (member_limit=1)
+            invite = await context.bot.create_chat_invite_link(
+                chat_id=VIP_CHANNEL_ID,
+                member_limit=1,
+                name=f"User {user_id}"
+            )
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="✅ ငွေပေးချေမှု အောင်မြင်ပါသည်။ VIP Member ဖြစ်ပါပြီ။\n\n⚠️ အောက်ပါ Link သည် တစ်ကြိမ်သာ အသုံးပြုနိုင်ပြီး (One Time Use) တစ်ယောက်ဝင်ပြီးပါက ပျက်သွားပါမည်။",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("VIP Channel ဝင်ရန်", url=invite.invite_link)]])
+            )
+            await query.edit_message_caption(query.message.caption + "\n\n✅ APPROVED")
         except Exception as e:
-            logger.error(f"Error sending link: {e}")
+            log.error(f"Invite Link Error: {e}")
+            await query.edit_message_caption(query.message.caption + f"\n\n✅ APPROVED BUT LINK ERROR: {e}")
+            await context.bot.send_message(chat_id=user_id, text="✅ Payment Approved. (Invite Link Error - Please contact Admin)")
+
     else:
         cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (user_id,))
         conn.commit()
-        await query.message.edit_caption("❌ <b>Rejected.</b>", parse_mode="HTML")
-        await context.bot.send_message(chat_id=user_id, text="❌ <b>သင်၏ VIP တောင်းဆိုမှု ငြင်းပယ်ခံရပါသည်။</b>")
+
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ ငွေပေးချေမှု မအောင်မြင်ပါ။ (ငွေမဝင်ခြင်း သို့မဟုတ် အချက်အလက်မှားယွင်းခြင်း)"
+            )
+            await query.edit_message_caption(query.message.caption + "\n\n❌ REJECTED")
+        except:
+            pass
     conn.close()
 
-async def inviter_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
+# --- NEW STATS DASHBOARD ---
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+
+    now = datetime.now()
+    today_date = now.date().isoformat()
+    this_month = now.strftime("%Y-%m")
+
+    # 1. ဝင်ငွေ အကျဉ်းချုပ် တွက်ချက်ခြင်း
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (today_date,))
+    today_income = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND created_at LIKE ?", (f"{this_month}%",))
+    month_income = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED'")
+    total_income = cur.fetchone()[0] or 0
+
+    # 2. VIP အခြေအနေ တွက်ချက်ခြင်း
+    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+    total_vips = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='REJECTED'")
+    rejected_count = cur.fetchone()[0] or 0
+
+    # 3. နေ့ရက်အလိုက် ဝင်ငွေ (နောက်ဆုံး ၇ ရက်စာ)
+    daily_stats = ""
+    for i in range(6, -1, -1):
+        d = (now - timedelta(days=i)).date()
+        cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (d.isoformat(),))
+        d_income = cur.fetchone()[0] or 0
+        daily_stats += f"📅 {d.strftime('%m-%d')} : {d_income} MMK\n"
+
+    conn.close()
+
+    # သင်အလိုရှိသော ပုံစံအတိုင်း စာသားပြင်ဆင်ခြင်း
+    text = (
+        "📊 **Admin Dashboard (အုပ်ချုပ်သူ မျက်နှာပြင်)**\n\n"
+        "💰 **ဝင်ငွေ အကျဉ်းချုပ်**\n\n"
+        f"💵 ယနေ့ ဝင်ငွေ : {today_income} MMK\n"
+        f"📅 ယခုလ ဝင်ငွေ : {month_income} MMK\n"
+        f"💎 စုစုပေါင်း ဝင်ငွေ : {total_income} MMK\n\n"
+        "👥 **ယနေ့ VIP အခြေအနေ**\n"
+        f"✅ VIP စုစုပေါင်း : {total_vips} ယောက်\n"
+        f"❌ Rejected (ပယ်ချထား) : {rejected_count} ယောက်\n\n"
+        "📅 **နေ့ရက်အလိုက် ဝင်ငွေ စာရင်း (လစဉ်)**\n\n"
+        f"{daily_stats}\n"
+        "🛠 **လုပ်ဆောင်ချက်များ (ACTIONS)**"
+    )
+
+    # ခလုတ်များ (Actions) ပြင်ဆင်ခြင်း
     kb = [
-        [InlineKeyboardButton("➕ ကုဒ်အသစ်ထည့်ရန်", callback_data="add_inviter")],
-        [InlineKeyboardButton("📜 စာရင်းကြည့်ရန်", callback_data="list_inviters")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_admin_home")]
+        [InlineKeyboardButton("📢 ကြော်ညာတင်ရန်", callback_data="ads")],
+        [InlineKeyboardButton("➕ Agent အသစ်ထည့်ရန်", callback_data="add_inviter")],
+        [InlineKeyboardButton("💳 Payment ပြင်ရန်", callback_data="pay_menu")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard")]
     ]
-    await query.message.edit_text("🤝 <b>Inviter (ဖိတ်ခေါ်သူ) စီမံခြင်း</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-async def add_inviter_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    await query.message.edit_text("🔢 <b>Inviter ကုဒ်နံပါတ် ရိုက်ပို့ပါ။</b>", parse_mode="HTML")
-    return INVITER_CODE
+    await query.message.edit_text(
+        text, 
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
-async def receive_inviter_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_inv_code'] = update.message.text
-    await update.message.reply_text("👤 <b>Inviter အမည် ရိုက်ပို့ပါ။</b>", parse_mode="HTML")
-    return INVITER_NAME
+# --- ADS SCHEDULER ---
 
-async def receive_inviter_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.message.text
-    code = context.user_data['new_inv_code']
-    conn = get_db(); cur = conn.cursor()
+async def ads_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_text("📸 Photo သို့မဟုတ် 🎥 Video ပို့ပါ (Caption ပါထည့်ရေးပေးပါ)")
+    return AD_MEDIA
+
+async def ads_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if msg.photo:
+        context.user_data["media"] = ("photo", msg.photo[-1].file_id, msg.caption or "")
+    elif msg.video:
+        context.user_data["media"] = ("video", msg.video.file_id, msg.caption or "")
+    else:
+        await msg.reply_text("Photo/Video ပို့ပေးပါ")
+        return AD_MEDIA
+
+    await msg.reply_text("📅 ဘယ်နှစ်ရက်တင်မလဲ? (နံပါတ်သာရိုက်ပါ)")
+    return AD_DAYS
+
+async def ads_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        cur.execute("INSERT INTO inviters (code, name, total_count, month_count, last_month) VALUES (?, ?, 0, 0, ?)", 
-                    (code, name, datetime.now().strftime("%Y-%m")))
-        conn.commit()
-        await update.message.reply_text(f"✅ Code: {code}\nName: {name}")
+        context.user_data["days"] = int(update.message.text)
     except:
-        await update.message.reply_text("❌ Code ရှိပြီးသားဖြစ်နေသည်။")
-    finally:
-        conn.close()
+        return AD_DAYS
+    await update.message.reply_text("⏱️ ဘယ်နှနာရီခြားတစ်ခါ တင်မလဲ? (နံပါတ်သာရိုက်ပါ)")
+    return AD_INTERVAL
+
+async def ads_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        hours = int(update.message.text)
+    except:
+        return AD_INTERVAL
+
+    media_type, file_id, caption = context.user_data["media"]
+    days = context.user_data["days"]
+    now = datetime.now()
+    end = now + timedelta(days=days)
+
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO ads(media_type,file_id,caption,total_days,interval_hours,next_post,end_at,active) VALUES(?,?,?,?,?,?,?,1)",
+                (media_type, file_id, caption, days, hours, now.isoformat(), end.isoformat()))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ ကြော်ညာ schedule ပြီးပါပြီ")
     return ConversationHandler.END
 
-async def list_inviters(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT code, name, total_count, month_count FROM inviters")
-    rows = cur.fetchall(); conn.close()
-    text = "📜 <b>Inviter စာရင်း</b>\n\n"
-    for r in rows: text += f"🔹 {r[1]} ({r[0]}) - Total: {r[2]} | Month: {r[3]}\n"
-    await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_inviters")]]))
-
-# ================= JOB & ADS =================
 async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
-    conn = get_db(); cur = conn.cursor()
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
     now = datetime.now()
     cur.execute("SELECT id, media_type, file_id, caption, interval_hours, end_at FROM ads WHERE active=1 AND next_post <= ?", (now.isoformat(),))
     ads = cur.fetchall()
+    
     for ad in ads:
         ad_id, m_type, f_id, cap, interval, end_str = ad
         try:
-            if m_type == "photo": await context.bot.send_photo(chat_id=MAIN_CHANNEL_ID, photo=f_id, caption=cap)
-            else: await context.bot.send_video(chat_id=MAIN_CHANNEL_ID, video=f_id, caption=cap)
+            if m_type == "photo": await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=f_id, caption=cap)
+            else: await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=f_id, caption=cap)
         except: pass
+            
         next_time = now + timedelta(hours=interval)
         if now >= datetime.fromisoformat(end_str): cur.execute("UPDATE ads SET active=0 WHERE id=?", (ad_id,))
         else: cur.execute("UPDATE ads SET next_post=? WHERE id=?", (next_time.isoformat(), ad_id))
+    conn.commit()
+    conn.close()
+
+# --- PAYMENT EDIT ---
+
+async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    kb = [
+        [InlineKeyboardButton("KBZ", callback_data="edit_KBZ")],
+        [InlineKeyboardButton("Wave", callback_data="edit_WAVE")],
+        [InlineKeyboardButton("AYA", callback_data="edit_AYA")],
+        [InlineKeyboardButton("CB", callback_data="edit_CB")],
+        [InlineKeyboardButton("Back", callback_data="admin_dashboard")]
+    ]
+    await query.message.edit_text("💳 ပြင်လိုသော Payment ရွေးပါ", reply_markup=InlineKeyboardMarkup(kb))
+
+async def pay_phone_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["edit_method"] = query.data.split("_")[1]
+    await query.message.delete()
+    await query.message.chat.send_message("📱 ဖုန်းနံပါတ် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုလျှင် /skip)")
+    return PAY_PHONE
+
+async def pay_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    context.user_data["new_phone"] = text if text != "/skip" else None
+    await update.message.reply_text("👤 အကောင့်နာမည် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုလျှင် /skip)")
+    return PAY_NAME_EDIT
+
+async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_name = update.message.text if update.message.text != "/skip" else None
+    method, new_phone = context.user_data["edit_method"], context.user_data.get("new_phone")
+    conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
+    if new_phone: cur.execute("UPDATE payment_settings SET phone=? WHERE method=?", (new_phone, method))
+    if new_name: cur.execute("UPDATE payment_settings SET name=? WHERE method=?", (new_name, method))
     conn.commit(); conn.close()
+    await update.message.reply_text("✅ သိမ်းဆည်းပြီးပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="admin_dashboard")]]))
+    return ConversationHandler.END
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
+    init_db()
+    # JobQueue ကိုပါ ထည့်သွင်းတည်ဆောက်ခြင်း
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Check if job_queue is available (requires [job-queue] extra)
+    # Ads Job Scheduler
     if app.job_queue:
-        app.job_queue.run_repeating(post_ads_job, interval=3600, first=10)
-    else:
-        logger.warning("JobQueue is not initialized. Background ads will not run.")
+        app.job_queue.run_repeating(post_ads_job, interval=60, first=10)
 
-    # User VIP Conversation
-    vip_conv = ConversationHandler(
+    # Handlers
+    user_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(payment_info, pattern="^pay_")],
         states={
-            WAITING_SLIP: [MessageHandler(filters.PHOTO, receive_slip)],
+            WAITING_SLIP: [MessageHandler(filters.PHOTO, receive_slip)], 
             WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
-            WAITING_REF_CHOICE: [CallbackQueryHandler(referral_choice, pattern="^ref_")],
-            WAITING_REF_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_referral_code)],
+            WAITING_REF: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_referral),
+                CallbackQueryHandler(skip_referral, pattern="^skip_ref$")
+            ]
         },
-        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(start, pattern="^back_home$")],
+        fallbacks=[CommandHandler("start", start)],
     )
 
-    # Admin Inviter Conversation
+    ads_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ads_start, pattern="^ads$")],
+        states={AD_MEDIA: [MessageHandler(filters.PHOTO | filters.VIDEO, ads_media)], AD_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ads_days)], AD_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ads_interval)]},
+        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")],
+    )
+
+    pay_edit_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(pay_phone_ask, pattern="^edit_")],
+        states={PAY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_phone_save), CommandHandler("skip", pay_phone_save)], PAY_NAME_EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_name_save), CommandHandler("skip", pay_name_save)]},
+        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")],
+    )
+    
     inviter_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_inviter_start, pattern="^add_inviter$")],
         states={
-            INVITER_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inviter_code)],
-            INVITER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inviter_name)],
+            INVITER_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_inviter_code)],
+            INVITER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_inviter_name)]
         },
-        fallbacks=[CommandHandler("tharngal", admin_dashboard_menu), CallbackQueryHandler(inviter_menu, pattern="^admin_inviters$")]
+        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")],
     )
 
-    app.add_handler(vip_conv)
-    app.add_handler(inviter_conv)
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("tharngal", admin_dashboard_menu))
-    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
-    app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
-    app.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
-    app.add_handler(CallbackQueryHandler(admin_dashboard_menu, pattern="^back_admin_home$"))
-    app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
-    app.add_handler(CallbackQueryHandler(inviter_menu, pattern="^admin_inviters$"))
-    app.add_handler(CallbackQueryHandler(list_inviters, pattern="^list_inviters$"))
-    app.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|reject)_"))
+    app.add_handler(CommandHandler("tharngal", tharngal_command))
+    app.add_handler(user_conv)
+    app.add_handler(ads_conv)
+    app.add_handler(pay_edit_conv)
+    app.add_handler(inviter_conv)
     
-    print("Bot is started...")
-    app.run_polling()
+    app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
+    app.add_handler(CallbackQueryHandler(payment_methods, pattern="^choose_payment$"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
+    app.add_handler(CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$"))
+    app.add_handler(CallbackQueryHandler(admin_payment_action, pattern="^admin_"))
+    app.add_handler(CallbackQueryHandler(stats, pattern="^stats$"))
+    app.add_handler(CallbackQueryHandler(pay_menu, pattern="^pay_menu$"))
+
+    print("Bot is running... (Press Ctrl+C to stop)")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
