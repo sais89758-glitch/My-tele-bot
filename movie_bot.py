@@ -82,118 +82,28 @@ PAY_PHONE, PAY_NAME_EDIT = range(30, 32)
 # ============================================================
 # 1. USER SIDE (VIP BUY)
 # ============================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🎬 Zan Movie Channel Bot\n\n"
-        "⛔ Screenshot (SS) မရ\n"
-        "⛔ Screen Record မရ\n"
-        "⛔ Download / Save / Forward မရ\n\n"
-        "📌 ဇာတ်ကားများကို Channel အတွင်းသာ ကြည့်ရှုနိုင်ပါသည်။"
-   keyboard = [
-        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် ({DEFAULT_PRICE} MMK)", callback_data="vip_buy")],
-        [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL_URL)],
-    ]
-    if update.effective_user.id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton("🛠 Admin Dashboard", callback_data="admin_dashboard")])
-    
-    if update.message:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    else:
-        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
 async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("ဆက်လက်လုပ်ဆောင်မည်", callback_data="choose_payment")], [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")]]
-    await query.message.edit_text(""⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
-        "⛔ channel နှင့် bot ကိုထွက်မိ၊ဖျတ်မိပါက link ပြန်မပေးပါ\n"
+
+    keyboard = [
+        [InlineKeyboardButton("ဆက်လက်လုပ်ဆောင်မည်", callback_data="choose_payment")],
+        [InlineKeyboardButton("မဝယ်တော့ပါ", callback_data="back_home")]
+    ]
+
+    text = (
+        "⚠️ ငွေမလွဲခင် မဖြစ်မနေ ဖတ်ပါ\n\n"
+        "⛔ channel နှင့် bot ကို ထွက်မိ / ဖျတ်မိပါက link ပြန်မပေးပါ\n"
         "⛔ လွဲပြီးသားငွေ ပြန်မအမ်းပါ\n"
         "⛔ ခွဲလွဲခြင်း လုံးဝမလက်ခံပါ\n"
         "⛔ တစ်ကြိမ်ထဲ အပြည့်လွဲရပါမည်\n\n"
-        "ဆက်လက်လုပ်ဆောင်မလား?"", reply_markup=InlineKeyboardMarkup(keyboard))
+        "ဆက်လက်လုပ်ဆောင်မလား?"
+    )
 
-async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("KBZ Pay", callback_data="pay_KBZ"), InlineKeyboardButton("Wave Pay", callback_data="pay_WAVE")],
-        [InlineKeyboardButton("AYA Pay", callback_data="pay_AYA"), InlineKeyboardButton("CB Pay", callback_data="pay_CB")],
-        [InlineKeyboardButton("Back", callback_data="back_home")]
-    ]
-    await query.message.edit_text("ငွေပေးချေမှုနည်းလမ်း ရွေးပါ", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    method = query.data.split("_")[1]
-    context.user_data["buy_method"] = method
-    
-    conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
-    cur.execute("SELECT phone, name FROM payment_settings WHERE method=?", (method,))
-    row = cur.fetchone(); conn.close()
-    
-    ph = row[0] if row else DEFAULT_PHONE
-    nm = row[1] if row else DEFAULT_NAME
-    
-    await query.message.edit_text(f"💳 {method} Pay\n📱 ဖုန်း: `{ph}`\n👤 အမည်: {nm}\n\n⚠️ ပြေစာ Screenshot ပို့ပါ", parse_mode="Markdown")
-    return WAITING_SLIP
-
-async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
-        await update.message.reply_text("⚠️ ဓာတ်ပုံသာ ပို့ပေးပါ။")
-        return WAITING_SLIP
-        
-    context.user_data["buy_slip"] = update.message.photo[-1].file_id
-    await update.message.reply_text("✅ ပြေစာရရှိပါသည်။ ငွေလွဲသူအကောင့်နာမည် ပို့ပေးပါ။")
-    return WAITING_NAME
-
-async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["buy_payname"] = update.message.text
-    kb = [[InlineKeyboardButton("မရှိပါ (Skip)", callback_data="skip_ref")]]
-    await update.message.reply_text("👤 Agent/Referral Code ရှိပါက ရိုက်ထည့်ပါ (မရှိရင် Skip နှိပ်ပါ)", reply_markup=InlineKeyboardMarkup(kb))
-    return WAITING_REF
-
-async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Check if this comes from a button click (Skip) or text message
-    if update.callback_query:
-        await update.callback_query.answer()
-        ref = None
-    else:
-        ref = update.message.text.strip() if update.message.text else None
-    
-    if ref:
-        conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
-        cur.execute("SELECT name FROM inviters WHERE code=?", (ref,))
-        if not cur.fetchone():
-            conn.close()
-            await update.message.reply_text("❌ Code မှားနေပါတယ်။ ပြန်ရိုက်ပါ (သို့) Skip နှိပ်ပါ။")
-            return WAITING_REF
-        conn.close()
-    
-    # Save & Notify Admin
-    uid = update.effective_user.id
-    method = context.user_data.get("buy_method", "Unknown")
-    slip = context.user_data.get("buy_slip")
-    p_name = context.user_data.get("buy_payname", "Unknown")
-    
-    conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
-    cur.execute("INSERT INTO payments (user_id, method, account_name, amount, status, created_at, ref_code) VALUES (?,?,?,?,?,?,?)",
-                (uid, method, p_name, DEFAULT_PRICE, "PENDING", datetime.now().isoformat(), ref))
-    conn.commit(); conn.close()
-    
-    msg = f"🔔 **VIP Request**\nID: `{uid}`\nMethod: {method}\nName: {p_name}\nRef: `{ref}`"
-    kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"admin_ok_{uid}"), InlineKeyboardButton("❌ Reject", callback_data=f"admin_fail_{uid}")]]
-    
-    try:
-        await context.bot.send_photo(chat_id=ADMIN_ID, photo=slip, caption=msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        log.error(f"Failed to send to admin: {e}")
-    
-    text = "✅ Admin ထံ ပို့ပြီးပါပြီ။ ခေတ္တစောင့်ပေးပါ။"
-    if update.callback_query: await update.callback_query.message.edit_text(text)
-    else: await update.message.reply_text(text)
-    return ConversationHandler.END
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # ============================================================
 # 2. ADMIN SIDE
