@@ -217,7 +217,8 @@ async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text("✅ Admin ထံ ပို့ပြီးပါပြီ")
+    await update.message.reply_text(" "✅ ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ။\n"
+        "Admin စစ်ဆေးပြီးပါက Bot မှတဆင့် အကြောင်းကြားပါမည်။")
     return ConversationHandler.END
 
 # =====================================================
