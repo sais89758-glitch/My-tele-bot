@@ -127,6 +127,10 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_SLIP
 
 async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.photo:
+        await update.message.reply_text("⚠️ ဓာတ်ပုံသာ ပို့ပေးပါ။")
+        return WAITING_SLIP
+        
     context.user_data["buy_slip"] = update.message.photo[-1].file_id
     await update.message.reply_text("✅ ပြေစာရရှိပါသည်။ ငွေလွဲသူအကောင့်နာမည် ပို့ပေးပါ။")
     return WAITING_NAME
@@ -138,7 +142,12 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_REF
 
 async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ref = update.message.text.strip() if update.message else None
+    # Check if this comes from a button click (Skip) or text message
+    if update.callback_query:
+        await update.callback_query.answer()
+        ref = None
+    else:
+        ref = update.message.text.strip() if update.message.text else None
     
     if ref:
         conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
@@ -151,9 +160,9 @@ async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Save & Notify Admin
     uid = update.effective_user.id
-    method = context.user_data["buy_method"]
-    slip = context.user_data["buy_slip"]
-    p_name = context.user_data["buy_payname"]
+    method = context.user_data.get("buy_method", "Unknown")
+    slip = context.user_data.get("buy_slip")
+    p_name = context.user_data.get("buy_payname", "Unknown")
     
     conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
     cur.execute("INSERT INTO payments (user_id, method, account_name, amount, status, created_at, ref_code) VALUES (?,?,?,?,?,?,?)",
@@ -163,7 +172,10 @@ async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"🔔 **VIP Request**\nID: `{uid}`\nMethod: {method}\nName: {p_name}\nRef: `{ref}`"
     kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"admin_ok_{uid}"), InlineKeyboardButton("❌ Reject", callback_data=f"admin_fail_{uid}")]]
     
-    await context.bot.send_photo(chat_id=ADMIN_ID, photo=slip, caption=msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    try:
+        await context.bot.send_photo(chat_id=ADMIN_ID, photo=slip, caption=msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        log.error(f"Failed to send to admin: {e}")
     
     text = "✅ Admin ထံ ပို့ပြီးပါပြီ။ ခေတ္တစောင့်ပေးပါ။"
     if update.callback_query: await update.callback_query.message.edit_text(text)
@@ -176,14 +188,27 @@ async def process_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
+    
+    # Handle both Message and CallbackQuery updates
+    if update.callback_query:
+        try: await update.callback_query.answer()
+        except: pass
+        msg_obj = update.callback_query.message
+    else:
+        msg_obj = update.message
+
     kb = [
         [InlineKeyboardButton("📊 Stats", callback_data="stats"), InlineKeyboardButton("➕ Add Agent", callback_data="add_inviter")],
         [InlineKeyboardButton("📢 Post Ad", callback_data="ads"), InlineKeyboardButton("💳 Edit Pay", callback_data="pay_menu")],
         [InlineKeyboardButton("🔙 Back Home", callback_data="back_home")]
     ]
     msg = "🛠 **Admin Dashboard**"
-    if update.callback_query: await update.callback_query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-    else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    
+    if update.callback_query:
+        await msg_obj.edit_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    else:
+        await msg_obj.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    return ConversationHandler.END
 
 # --- Agent Flow ---
 async def add_inviter_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -247,14 +272,55 @@ async def ads_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Stats & Approval ---
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
-    now = datetime.now(); today = now.date().isoformat()
-    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (today,))
-    t_inc = cur.fetchone()[0] or 0
+    now = datetime.now()
+    today_str = now.date().isoformat()
+    current_month_str = now.strftime("%Y-%m")
+    
+    # 1. Today Income
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (today_str,))
+    today_inc = cur.fetchone()[0] or 0
+    
+    # 2. Monthly Income
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND strftime('%Y-%m', created_at)=?", (current_month_str,))
+    month_inc = cur.fetchone()[0] or 0
+
+    # 3. Total Income
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED'")
+    total_inc = cur.fetchone()[0] or 0
+    
+    # 4. VIP & User Stats
     cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
     vips = cur.fetchone()[0] or 0
+    
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='REJECTED'")
+    rejected_count = cur.fetchone()[0] or 0
+
+    # 5. Last 7 Days Breakdown
+    daily_stats = ""
+    # Loop for last 7 days (including today)
+    for i in range(6, -1, -1):
+        d = now - timedelta(days=i)
+        d_str = d.strftime("%Y-%m-%d") # for query
+        d_disp = d.strftime("%m-%d")   # for display
+        
+        cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?", (d_str,))
+        day_amt = cur.fetchone()[0] or 0
+        daily_stats += f"{d_disp} : {day_amt} MMK\n"
+        
     conn.close()
     
-    txt = f"📊 **Stats Overview**\n\n💵 Today: {t_inc} MMK\n👥 Total VIP: {vips} users"
+    txt = (
+        f"💰 **ဝင်ငွေ အကျဉ်းချုပ်**\n\n"
+        f"ယနေ့ ဝင်ငွေ : {today_inc} MMK\n"
+        f"ယခုလ ဝင်ငွေ : {month_inc} MMK\n"
+        f"စုစုပေါင်း ဝင်ငွေ : {total_inc} MMK\n\n"
+        f"👥 **VIP အခြေအနေ**\n\n"
+        f"VIP စုစုပေါင်း : {vips} ယောက်\n"
+        f"Rejected (ငွေလွဲမအောင်မြင် / ပယ်ချထား) : {rejected_count} ယောက်\n\n"
+        f"📅 **နေ့ရက်အလိုက် ဝင်ငွေ (နောက်ဆုံး ၇ ရက်)**\n\n"
+        f"{daily_stats}"
+    )
+    
     kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard")]]
     await update.callback_query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -292,19 +358,25 @@ def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # 1. User VIP Flow (Group 1)
+    # -----------------------------------------------------------
+    # FIX: Removed 'group=' from ConversationHandler constructors
+    # -----------------------------------------------------------
+
+    # 1. User VIP Flow
     user_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(payment_info, pattern="^pay_")],
         states={
             WAITING_SLIP: [MessageHandler(filters.PHOTO, receive_slip)],
             WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
-            WAITING_REF: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_ref), CallbackQueryHandler(process_ref, pattern="^skip_ref$")]
+            WAITING_REF: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_ref), 
+                CallbackQueryHandler(process_ref, pattern="^skip_ref$")
+            ]
         },
-        fallbacks=[CommandHandler("start", start)],
-        group=1
+        fallbacks=[CommandHandler("start", start)]
     )
 
-    # 2. Admin Ads Flow (Group 2)
+    # 2. Admin Ads Flow
     ads_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ads_start, pattern="^ads$")],
         states={
@@ -312,27 +384,29 @@ def main():
             AD_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ads_days_rec)],
             AD_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ads_final)]
         },
-        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")],
-        group=2
+        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")]
     )
 
-    # 3. Admin Inviter Flow (Group 3)
+    # 3. Admin Inviter Flow
     inviter_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_inviter_start, pattern="^add_inviter$")],
         states={
             INVITER_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, inviter_code_rec)],
             INVITER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, inviter_name_rec)]
         },
-        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")],
-        group=3
+        fallbacks=[CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$")]
     )
 
-    # Handlers
+    # -----------------------------------------------------------
+    # HANDLERS (Groups are assigned here instead)
+    # -----------------------------------------------------------
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tharngal", admin_dashboard))
-    app.add_handler(user_conv)
-    app.add_handler(ads_conv)
-    app.add_handler(inviter_conv)
+    
+    # Add handlers with specific groups to prevent blocking
+    app.add_handler(user_conv, group=1)
+    app.add_handler(ads_conv, group=2)
+    app.add_handler(inviter_conv, group=3)
     
     app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
     app.add_handler(CallbackQueryHandler(payment_methods, pattern="^choose_payment$"))
