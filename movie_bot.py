@@ -29,7 +29,7 @@ from telegram.ext import (
 # =====================================================
 
 # မိမိ Bot Token
-BOT_TOKEN = "8515688348:AAHkgGjz06M0BXBIqSuQzl2m_OFuUbakHAI"
+BOT_TOKEN = "8515688348:AAG9tp1ZJ03MVmxdNe26ZO1x9SFrDA3-FYY"
 
 # Admin Telegram ID
 ADMIN_ID = 6445257462
