@@ -325,17 +325,31 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (uid,))
         conn.commit()
+# 🔐 single-use invite link (1 user only)
+invite = await context.bot.create_chat_invite_link(
+    chat_id=VIP_CHANNEL_ID,
+    member_limit=1,
+    expire_date=int(expiry.timestamp())
+)
 
-        link = await context.bot.create_chat_invite_link(
-            chat_id=VIP_CHANNEL_ID,
-            member_limit=1,
-            expire_date=int(expiry.timestamp())
-        )
+kb = InlineKeyboardMarkup([[
+    InlineKeyboardButton(
+        "👑 VIP Channel သို့ဝင်ရန်",
+        url=invite.invite_link
+    )
+]])
 
-        await context.bot.send_message(
-            uid,
-            f"🎉 VIP အတည်ပြုပြီးပါပြီ\n\n🔗 VIP Channel ဝင်ရန်\n{link.invite_link}"
-        )
+await context.bot.send_message(
+    chat_id=uid,
+    text="🎉 VIP အတည်ပြုပြီးပါပြီ\n\nအောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇",
+    reply_markup=kb
+)
+await context.bot.send_message(
+    chat_id=uid,
+    text="🎉 VIP အတည်ပြုပြီးပါပြီ\n\nအောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇",
+    reply_markup=kb
+)
+
 
     else:
         cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (uid,))
