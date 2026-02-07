@@ -221,6 +221,53 @@ async def admin_dashboard_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     else: 
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+    vip_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='APPROVED'")
+    total_sales = cur.fetchone()[0]
+    total_revenue = total_sales * VIP_PRICE
+    conn.close()
+    
+    text = (
+        "📊 <b>Statistics</b>\n\n"
+        f"👥 Total VIPs: {vip_count}\n"
+        f"💰 Total Revenue: {total_revenue:,} MMK"
+    )
+    await query.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_admin_home")]]))
+
+async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    action, user_id = query.data.split("_")
+    user_id = int(user_id)
+    
+    conn = get_db(); cur = conn.cursor()
+    if action == "approve":
+        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (user_id,))
+        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip) VALUES (?, 1)", (user_id,))
+        
+        # Handle referral count if exists
+        cur.execute("SELECT referral_code FROM payments WHERE user_id=? AND status='APPROVED' ORDER BY id DESC LIMIT 1", (user_id,))
+        ref_res = cur.fetchone()
+        if ref_res and ref_res[0] != "-":
+            cur.execute("UPDATE inviters SET total_count = total_count + 1, month_count = month_count + 1 WHERE code=?", (ref_res[0],))
+        
+        conn.commit()
+        await query.message.edit_caption("✅ <b>Approved! User is now VIP.</b>", parse_mode="HTML")
+        try:
+            invite_link = await context.bot.create_chat_invite_link(chat_id=MAIN_CHANNEL_ID, member_limit=1)
+            await context.bot.send_message(chat_id=user_id, text=f"🎉 <b>VIP အတည်ပြုပြီးပါပြီ။</b>\n\nChannel သို့ဝင်ရန်: {invite_link.invite_link}", parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error sending link: {e}")
+    else:
+        cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (user_id,))
+        conn.commit()
+        await query.message.edit_caption("❌ <b>Rejected.</b>", parse_mode="HTML")
+        await context.bot.send_message(chat_id=user_id, text="❌ <b>သင်၏ VIP တောင်းဆိုမှု ငြင်းပယ်ခံရပါသည်။</b>")
+    conn.close()
+
 async def inviter_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     kb = [
@@ -281,21 +328,49 @@ async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
         else: cur.execute("UPDATE ads SET next_post=? WHERE id=?", (next_time.isoformat(), ad_id))
     conn.commit(); conn.close()
 
-# (ကျန်ရှိသော Admin Function များနှင့် Main Function များသည် အပေါ်က version အတိုင်းဖြစ်ပါသည်)
-# ... (Admin pay menu, Stats, Action, Edit Payment တို့ကို အပေါ်ကအတိုင်း ဆက်လက်အသုံးပြုနိုင်သည်)
-
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+    
+    # Check if job_queue is available (requires [job-queue] extra)
     if app.job_queue:
         app.job_queue.run_repeating(post_ads_job, interval=3600, first=10)
+    else:
+        logger.warning("JobQueue is not initialized. Background ads will not run.")
 
-    # Handlers များကို ဤနေရာတွင် app.add_handler() ဖြင့် ထပ်မံထည့်သွင်းပါ
-    # ... (Conversations များ အားလုံး)
-    
+    # User VIP Conversation
+    vip_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(payment_info, pattern="^pay_")],
+        states={
+            WAITING_SLIP: [MessageHandler(filters.PHOTO, receive_slip)],
+            WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
+            WAITING_REF_CHOICE: [CallbackQueryHandler(referral_choice, pattern="^ref_")],
+            WAITING_REF_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_referral_code)],
+        },
+        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(start, pattern="^back_home$")],
+    )
+
+    # Admin Inviter Conversation
+    inviter_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_inviter_start, pattern="^add_inviter$")],
+        states={
+            INVITER_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inviter_code)],
+            INVITER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_inviter_name)],
+        },
+        fallbacks=[CommandHandler("tharngal", admin_dashboard_menu), CallbackQueryHandler(inviter_menu, pattern="^admin_inviters$")]
+    )
+
+    app.add_handler(vip_conv)
+    app.add_handler(inviter_conv)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tharngal", admin_dashboard_menu))
+    app.add_handler(CallbackQueryHandler(start, pattern="^back_home$"))
+    app.add_handler(CallbackQueryHandler(vip_warning, pattern="^vip_buy$"))
+    app.add_handler(CallbackQueryHandler(payment_methods, pattern="^pay_methods$"))
+    app.add_handler(CallbackQueryHandler(admin_dashboard_menu, pattern="^back_admin_home$"))
+    app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
+    app.add_handler(CallbackQueryHandler(inviter_menu, pattern="^admin_inviters$"))
+    app.add_handler(CallbackQueryHandler(list_inviters, pattern="^list_inviters$"))
     app.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|reject)_"))
-    # ...
     
     print("Bot is started...")
     app.run_polling()
