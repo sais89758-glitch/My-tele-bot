@@ -326,42 +326,62 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
     cur = conn.cursor()
 
     if action == "ok":
+        # 1️⃣ VIP expiry (30 days)
         expiry = datetime.now() + timedelta(days=30)
+
         cur.execute(
             "INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?,?,?)",
             (uid, 1, expiry.isoformat())
         )
-        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (uid,))
+        cur.execute(
+            "UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'",
+            (uid,)
+        )
         conn.commit()
-# 🔐 single-use invite link (1 user only)
-invite = await context.bot.create_chat_invite_link(
-    chat_id=VIP_CHANNEL_ID,
-    member_limit=1,
-    expire_date=int(expiry.timestamp())
-)
 
-kb = InlineKeyboardMarkup([[
-    InlineKeyboardButton(
-        "👑 VIP Channel သို့ဝင်ရန်",
-        url=invite.invite_link
-    )
-]])
+        # 2️⃣ 🔐 single-user invite link (member_limit = 1)
+        invite = await context.bot.create_chat_invite_link(
+            chat_id=VIP_CHANNEL_ID,
+            member_limit=1,
+            expire_date=int(expiry.timestamp())
+        )
 
-await context.bot.send_message(
-    chat_id=uid,
-    text="🎉 VIP အတည်ပြုပြီးပါပြီ\n\nအောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇",
-    reply_markup=kb
-)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👑 VIP Channel သို့ဝင်ရန်", url=invite.invite_link)]
+        ])
 
-
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(
+                "🎉 VIP အတည်ပြုပြီးပါပြီ\n\n"
+                "အောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇"
+            ),
+            reply_markup=kb
+        )
 
     else:
-        cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (uid,))
+        # ❌ Reject
+        cur.execute(
+            "UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'",
+            (uid,)
+        )
         conn.commit()
-        await context.bot.send_message(uid, "❌ ငွေပေးချေမှု မအောင်မြင်ပါ")
+
+        await context.bot.send_message(
+            chat_id=uid,
+            text="❌ ငွေပေးချေမှု မအောင်မြင်ပါ"
+        )
 
     conn.close()
-    await q.edit_message_caption(q.message.caption + f"\n\nDONE: {action.upper()}")
+
+    # 3️⃣ Update admin message
+    try:
+        await q.edit_message_caption(
+            q.message.caption + f"\n\nDONE: {action.upper()}"
+        )
+    except:
+        pass
+
 
 # ============================================================
 # ADMIN DASHBOARD
