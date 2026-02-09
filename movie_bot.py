@@ -259,10 +259,18 @@ async def receive_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok = cur.fetchone()
     conn.close()
 
-    if not ok:
-        kb = [[InlineKeyboardButton("🔙 Back", callback_data="back_home")]]
-        await update.message.reply_text("❌ ကုဒ်မှားနေပါတယ်", reply_markup=InlineKeyboardMarkup(kb))
-        return ConversationHandler.END
+if not ok:
+    kb = [[
+        InlineKeyboardButton("🔙 နောက်သို့", callback_data="ask_ref_again")
+    ]]
+
+    await update.message.reply_text(
+        "❌ ဖိတ်ခေါ်ကုဒ် မှားနေပါတယ်\nပြန်ရွေးပါ 👇",
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+
+    return WAITING_REF_CHOICE
+
 
     await notify_admin(context, update.effective_user.id, code)
 
@@ -344,11 +352,7 @@ await context.bot.send_message(
     text="🎉 VIP အတည်ပြုပြီးပါပြီ\n\nအောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇",
     reply_markup=kb
 )
-await context.bot.send_message(
-    chat_id=uid,
-    text="🎉 VIP အတည်ပြုပြီးပါပြီ\n\nအောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇",
-    reply_markup=kb
-)
+
 
 
     else:
