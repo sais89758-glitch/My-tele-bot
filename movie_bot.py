@@ -259,17 +259,16 @@ async def receive_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ok = cur.fetchone()
     conn.close()
 
-if not ok:
-    kb = [[
-        InlineKeyboardButton("🔙 နောက်သို့", callback_data="ask_ref_again")
-    ]]
+    if not ok:
+        kb = [[
+            InlineKeyboardButton("↩ ပြန်မေး", callback_data="ask_ref_again")
+        ]]
+        await update.message.reply_text(
+            "❌ ကုဒ်မှားနေပါတယ်\nပြန်စမ်းကြည့်ပါ 👇",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
+        return WAITING_REF_CHOICE
 
-    await update.message.reply_text(
-        "❌ ဖိတ်ခေါ်ကုဒ် မှားနေပါတယ်\nပြန်ရွေးပါ 👇",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
-
-    return WAITING_REF_CHOICE
 
 
     await notify_admin(context, update.effective_user.id, code)
