@@ -102,6 +102,23 @@ def init_db():
 
 WAITING_SLIP, WAITING_NAME, WAITING_REF_CHOICE, WAITING_REF = range(1, 5)
 
+async def ref_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    choice = query.data  # ref_yes / ref_no
+
+  if choice == "ref_no":
+    await query.message.edit_text(
+        "✅ ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ。\n"
+        "Admin စစ်ဆေးပြီးပါက Bot မှတဆင့် အကြောင်းကြားပါမည်။"
+    )
+    return ConversationHandler.END
+
+elif choice == "ref_yes":
+    await query.message.edit_text("🔑 ဖိတ်ခေါ် ကုဒ် (၅ လုံး) ပို့ပေးပါ")
+    return WAITING_REF
+
 
 # ============================================================
 # START
