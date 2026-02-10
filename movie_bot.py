@@ -31,6 +31,7 @@ BOT_TOKEN = "8515688348:AAG9tp1ZJ03MVmxdNe26ZO1x9SFrDA3-FYY"
 ADMIN_ID = 6445257462
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
 VIP_CHANNEL_ID = -1003863175003
+CHANNEL_USERNAME = "@ZanchannelMM" # For Ads posting
 
 VIP_PRICE = 10000
 DEFAULT_PHONE = "09960202983"
@@ -89,7 +90,17 @@ def init_db():
         next_post TEXT,
         end_at TEXT,
         interval_hours INTEGER,
-        active INTEGER
+        active INTEGER,
+        total_days INTEGER
+    )
+    """)
+    
+    # Create payment_settings table if not exists (used in pay_name_save)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS payment_settings (
+        method TEXT PRIMARY KEY,
+        phone TEXT,
+        name TEXT
     )
     """)
 
@@ -100,7 +111,14 @@ def init_db():
 # STATES
 # ============================================================
 
+# User VIP States
 WAITING_SLIP, WAITING_NAME, WAITING_REF_CHOICE, WAITING_REF = range(1, 5)
+
+# Admin Ads States
+AD_MEDIA, AD_DAYS, AD_INTERVAL = range(5, 8)
+
+# Admin Payment Edit States
+PAY_CHOICE, PAY_PHONE, PAY_NAME_EDIT = range(8, 11)
 
 async def ref_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -137,7 +155,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     kb = [
-        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် ({VIP_PRICE} MMK)", callback_data="vip_buy")],
+        # Promotion စာသား ထည့်လိုက်ပါသည်
+        [InlineKeyboardButton(f"👑 VIP ဝင်ရန် (ပရိုမိုးရှင်း {VIP_PRICE} MMK)", callback_data="vip_buy")],
         [InlineKeyboardButton("📢 Channel သို့ဝင်ရန်", url=MAIN_CHANNEL_URL)]
     ]
 
@@ -204,7 +223,7 @@ async def payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         f"💳 {method} Pay\n\n"
-        f"💰 Amount: {VIP_PRICE} MMK\n"
+        f"💰 Amount: {VIP_PRICE} MMK (ပရိုမိုးရှင်း)\n"  # Promotion စာသား ထည့်လိုက်ပါသည်
         f"📱 Phone: {DEFAULT_PHONE}\n"
         f"👤 Name: {DEFAULT_NAME}\n\n"
         "‼️ တစ်ကြိမ်ထဲ အပြည့်လွဲပါ\n"
@@ -246,25 +265,19 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-    return ASK_REF
+    return WAITING_REF_CHOICE
 
 # ============================================================
-# ASK REF
+# ASK REF (This function seems redundant but kept for logic flow if needed)
 # ============================================================
 
 async def ask_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # This might be called if we loop back
     q = update.callback_query
-    await q.answer()
-
-    if q.data == "ref_no":
-        await notify_admin(context, q.from_user.id, None)
-        await q.message.edit_text(
-            "✅ ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ။\n"
-            "Admin စစ်ဆေးပြီးပါက Bot မှတဆင့် အကြောင်းကြားပါမည်။"
-        )
-        return ConversationHandler.END
-
-    await q.message.edit_text("🔑 ဖိတ်ခေါ် ကုဒ် (5 လုံး) ပို့ပေးပါ")
+    if q: await q.answer()
+    
+    # If explicitly called or looped
+    await update.effective_message.reply_text("🔑 ဖိတ်ခေါ် ကုဒ် (5 လုံး) ပို့ပေးပါ")
     return WAITING_REF
 
 # ============================================================
@@ -282,15 +295,14 @@ async def receive_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not ok:
         kb = [[
-            InlineKeyboardButton("↩ ပြန်မေး", callback_data="ask_ref_again")
+            InlineKeyboardButton("↩ ပြန်မေး", callback_data="ref_yes"), # Loop back to ref_yes logic or ask again
+            InlineKeyboardButton("မရှိပါ", callback_data="ref_no")
         ]]
         await update.message.reply_text(
             "❌ ကုဒ်မှားနေပါတယ်\nပြန်စမ်းကြည့်ပါ 👇",
             reply_markup=InlineKeyboardMarkup(kb)
         )
         return WAITING_REF_CHOICE
-
-
 
     await notify_admin(context, update.effective_user.id, code)
 
@@ -360,24 +372,28 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
         conn.commit()
 
         # 2️⃣ 🔐 single-user invite link (member_limit = 1)
-        invite = await context.bot.create_chat_invite_link(
-            chat_id=VIP_CHANNEL_ID,
-            member_limit=1,
-            expire_date=int(expiry.timestamp())
-        )
+        try:
+            invite = await context.bot.create_chat_invite_link(
+                chat_id=VIP_CHANNEL_ID,
+                member_limit=1,
+                expire_date=int(expiry.timestamp())
+            )
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 VIP Channel သို့ဝင်ရန်", url=invite.invite_link)]
+            ])
 
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👑 VIP Channel သို့ဝင်ရန်", url=invite.invite_link)]
-        ])
-
-        await context.bot.send_message(
-            chat_id=uid,
-            text=(
-                "🎉 VIP အတည်ပြုပြီးပါပြီ\n\n"
-                "အောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇"
-            ),
-            reply_markup=kb
-        )
+            await context.bot.send_message(
+                chat_id=uid,
+                text=(
+                    "🎉 VIP အတည်ပြုပြီးပါပြီ\n\n"
+                    "အောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇"
+                ),
+                reply_markup=kb
+            )
+        except Exception as e:
+            log.error(f"Invite Link Error: {e}")
+            await context.bot.send_message(chat_id=uid, text="VIP Approved but Error creating link. Contact Admin.")
 
     else:
         # ❌ Reject
@@ -505,10 +521,15 @@ user_conv = ConversationHandler(
         WAITING_REF: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ref)
         ],
+        # Payment Method sub-conversation handling inside main flow for simplicity
+        # or we could link states. But here user flow:
+        # vip_buy -> warning -> choose_payment -> payment_methods -> pay_KBZ -> payment_info -> WAITING_SLIP
     },
     fallbacks=[
         CommandHandler("start", start),
-        CallbackQueryHandler(start, pattern="^back_home$")
+        CallbackQueryHandler(start, pattern="^back_home$"),
+        CallbackQueryHandler(payment_methods, pattern="^choose_payment$"),
+        CallbackQueryHandler(payment_info, pattern="^pay_"),
     ]
 )
 
@@ -539,8 +560,12 @@ async def admin_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
+# Placeholder functions for ref actions to avoid errors if clicked
+async def ref_placeholder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("Coming soon!")
+
 # ============================================================
-# 📢 ADS MENU
+# 📢 ADS MENU (FIXED)
 # ============================================================
 
 async def ads_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -566,7 +591,9 @@ async def ads_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         context.user_data["days"] = int(update.message.text)
     except:
+        await update.message.reply_text("နံပါတ်သာ ရိုက်ထည့်ပါ")
         return AD_DAYS
+        
     await update.message.reply_text("⏱️ ဘယ်နှနာရီခြားတစ်ခါ တင်မလဲ? (နံပါတ်သာရိုက်ပါ)")
     return AD_INTERVAL
 
@@ -574,6 +601,7 @@ async def ads_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         hours = int(update.message.text)
     except:
+        await update.message.reply_text("နံပါတ်သာ ရိုက်ထည့်ပါ")
         return AD_INTERVAL
 
     media_type, file_id, caption = context.user_data["media"]
@@ -588,7 +616,7 @@ async def ads_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(f"✅ ကြော်ညာ schedule ပြီးပါပြီ")
+    await update.message.reply_text(f"✅ ကြော်ညာ schedule ပြီးပါပြီ", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="admin_dashboard")]]))
     return ConversationHandler.END
 
 async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
@@ -603,7 +631,9 @@ async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
         try:
             if m_type == "photo": await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=f_id, caption=cap)
             else: await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=f_id, caption=cap)
-        except: pass
+        except Exception as e:
+            log.error(f"Ads Error: {e}")
+            pass
             
         next_time = now + timedelta(hours=interval)
         if now >= datetime.fromisoformat(end_str): cur.execute("UPDATE ads SET active=0 WHERE id=?", (ad_id,))
@@ -612,7 +642,7 @@ async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
 # ============================================================
-# 💳 PAYMENT EDIT
+# 💳 PAYMENT EDIT (FIXED)
 # ============================================================
 
 async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -623,16 +653,17 @@ async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Wave", callback_data="edit_WAVE")],
         [InlineKeyboardButton("AYA", callback_data="edit_AYA")],
         [InlineKeyboardButton("CB", callback_data="edit_CB")],
-        [InlineKeyboardButton("Back", callback_data="admin_dashboard")]
+        [InlineKeyboardButton("Back", callback_data="admin_back")] # Changed to admin_back to exit conv
     ]
     await query.message.edit_text("💳 ပြင်လိုသော Payment ရွေးပါ", reply_markup=InlineKeyboardMarkup(kb))
+    return PAY_CHOICE
 
 async def pay_phone_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["edit_method"] = query.data.split("_")[1]
-    await query.message.delete()
-    await query.message.chat.send_message("📱 ဖုန်းနံပါတ် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုလျှင် /skip)")
+    # await query.message.delete() # Optional: keep history or delete
+    await query.message.edit_text(f"📱 {context.user_data['edit_method']} ဖုန်းနံပါတ် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုလျှင် /skip)")
     return PAY_PHONE
 
 async def pay_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -643,13 +674,23 @@ async def pay_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = update.message.text if update.message.text != "/skip" else None
-    method, new_phone = context.user_data["edit_method"], context.user_data.get("new_phone")
-    conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
+    method = context.user_data["edit_method"]
+    new_phone = context.user_data.get("new_phone")
+    
+    conn = sqlite3.connect(DB_NAME) 
+    cur = conn.cursor()
+    
+    # Simple upsert logic or update if exists. For simplicity assuming row might not exist
+    cur.execute("INSERT OR IGNORE INTO payment_settings (method, phone, name) VALUES (?, '', '')", (method,))
+    
     if new_phone: cur.execute("UPDATE payment_settings SET phone=? WHERE method=?", (new_phone, method))
     if new_name: cur.execute("UPDATE payment_settings SET name=? WHERE method=?", (new_name, method))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
+    
     await update.message.reply_text("✅ သိမ်းဆည်းပြီးပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="admin_dashboard")]]))
     return ConversationHandler.END
+
 # ============================================================
 # 🔙 BACK TO DASHBOARD
 # ============================================================
@@ -669,6 +710,7 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛠 ADMIN DASHBOARD",
         reply_markup=InlineKeyboardMarkup(kb)
     )
+    return ConversationHandler.END
 
 # ============================================================
 # HANDLER REGISTER (ADMIN ONLY)
@@ -677,10 +719,37 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register_admin_handlers(app):
     app.add_handler(CommandHandler("tharngal", tharngal))
     app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
-    app.add_handler(CallbackQueryHandler(admin_ads, pattern="^admin_ads$"))
-    app.add_handler(CallbackQueryHandler(admin_pay_edit, pattern="^admin_pay_edit$"))
     app.add_handler(CallbackQueryHandler(admin_ref, pattern="^admin_ref$"))
+    
+    # Ads Conversation
+    ads_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ads_start, pattern="^admin_ads$")],
+        states={
+            AD_MEDIA: [MessageHandler(filters.PHOTO | filters.VIDEO, ads_media)],
+            AD_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ads_days)],
+            AD_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ads_interval)],
+        },
+        fallbacks=[CallbackQueryHandler(admin_back, pattern="^admin_dashboard|admin_back$")]
+    )
+    app.add_handler(ads_conv)
+    
+    # Payment Edit Conversation
+    pay_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(pay_menu, pattern="^admin_pay_edit$")],
+        states={
+            PAY_CHOICE: [CallbackQueryHandler(pay_phone_ask, pattern="^edit_")],
+            PAY_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_phone_save)],
+            PAY_NAME_EDIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_name_save)],
+        },
+        fallbacks=[CallbackQueryHandler(admin_back, pattern="^admin_back$")]
+    )
+    app.add_handler(pay_conv)
+
     app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
+    app.add_handler(CallbackQueryHandler(admin_payment_action, pattern="^admin_"))
+    
+    # Placeholder for ref buttons
+    app.add_handler(CallbackQueryHandler(ref_placeholder, pattern="^ref_"))
 
 
 # ============================================================
@@ -689,18 +758,23 @@ def register_admin_handlers(app):
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(user_conv)
+    
+    init_db() # Ensure DB is created
 
     # ======================
-    # USER SIDE (မဖြစ်မနေလို)
+    # USER SIDE
     # ======================
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(user_conv)   # <-- ဒီလိုင်း အရမ်းအရေးကြီး
+    app.add_handler(user_conv)   
 
     # ======================
     # ADMIN SIDE
     # ======================
     register_admin_handlers(app)
+    
+    # Job Queue for Ads
+    if app.job_queue:
+        app.job_queue.run_repeating(post_ads_job, interval=3600, first=10)
 
     print("Bot Started...")
     app.run_polling()
