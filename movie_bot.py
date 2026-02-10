@@ -534,9 +534,7 @@ def register_admin_handlers(app):
     app.add_handler(CallbackQueryHandler(admin_ref, pattern="^admin_ref$"))
     app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
 
-    app.add_handler(user_conv)
-
-
+  
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
