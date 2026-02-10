@@ -539,7 +539,7 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ============================================================
-# HANDLER REGISTER (ADD TO main())
+# HANDLER REGISTER (ADMIN ONLY)
 # ============================================================
 
 def register_admin_handlers(app):
@@ -550,11 +550,23 @@ def register_admin_handlers(app):
     app.add_handler(CallbackQueryHandler(admin_ref, pattern="^admin_ref$"))
     app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
 
-  
+
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # register admin + user handlers
+    # ======================
+    # USER SIDE (မဖြစ်မနေလို)
+    # ======================
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(user_conv)   # <-- ဒီလိုင်း အရမ်းအရေးကြီး
+
+    # ======================
+    # ADMIN SIDE
+    # ======================
     register_admin_handlers(app)
 
     print("Bot Started...")
