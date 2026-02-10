@@ -112,13 +112,14 @@ def init_db():
 # ============================================================
 
 # User VIP States
-WAITING_SLIP, WAITING_NAME, WAITING_REF_CHOICE, WAITING_REF = range(1, 5)
+# Added VIP_CHOICE and PAYMENT_METHOD_SELECT to fix flow
+VIP_CHOICE, PAYMENT_METHOD_SELECT, WAITING_SLIP, WAITING_NAME, WAITING_REF_CHOICE, WAITING_REF = range(1, 7)
 
 # Admin Ads States
-AD_MEDIA, AD_DAYS, AD_INTERVAL = range(5, 8)
+AD_MEDIA, AD_DAYS, AD_INTERVAL = range(7, 10)
 
 # Admin Payment Edit States
-PAY_CHOICE, PAY_PHONE, PAY_NAME_EDIT = range(8, 11)
+PAY_CHOICE, PAY_PHONE, PAY_NAME_EDIT = range(10, 13)
 
 async def ref_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -167,6 +168,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
     else:
         await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    
+    return ConversationHandler.END
 
 # ============================================================
 # VIP WARNING
@@ -191,6 +194,7 @@ async def vip_warning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    return VIP_CHOICE # MUST return a state to wait for button click
 
 # ============================================================
 # PAYMENT METHODS
@@ -209,6 +213,7 @@ async def payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await q.message.edit_text("ငွေပေးချေမှုနည်းလမ်း ရွေးပါ", reply_markup=InlineKeyboardMarkup(kb))
+    return PAYMENT_METHOD_SELECT # MUST return a state
 
 # ============================================================
 # PAYMENT INFO
@@ -351,7 +356,13 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
     q = update.callback_query
     await q.answer()
 
-    _, action, uid = q.data.split("_")
+    # Fixed logic to prevent ValueError on other admin buttons
+    data_parts = q.data.split("_")
+    if len(data_parts) < 3:
+        # Ignore if not a payment action (e.g. admin_dashboard)
+        return
+
+    _, action, uid = data_parts
     uid = int(uid)
 
     conn = sqlite3.connect(DB_NAME)
@@ -427,17 +438,8 @@ async def tharngal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    kb = [
-        [InlineKeyboardButton("📊 ဝင်ငွေ / စာရင်း", callback_data="admin_stats")],
-        [InlineKeyboardButton("📢 ကြော်ညာပို့", callback_data="admin_ads")],
-        [InlineKeyboardButton("💳 Payment ပြင်ရန်", callback_data="admin_pay_edit")],
-        [InlineKeyboardButton("🧩 ဖိတ်ခေါ် ကုဒ်", callback_data="admin_ref")],
-    ]
-
-    await update.message.reply_text(
-        "🛠 ADMIN DASHBOARD",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+    # Reuse admin_back function to show dashboard
+    await admin_back(update, context)
 
 # ============================================================
 # 📊 STATS / REVENUE
@@ -509,6 +511,16 @@ user_conv = ConversationHandler(
         CallbackQueryHandler(vip_warning, pattern="^vip_buy$")
     ],
     states={
+        # New State: User sees warning, decides to continue
+        VIP_CHOICE: [
+            CallbackQueryHandler(payment_methods, pattern="^choose_payment$"),
+            CallbackQueryHandler(start, pattern="^back_home$")
+        ],
+        # New State: User selects payment method
+        PAYMENT_METHOD_SELECT: [
+            CallbackQueryHandler(payment_info, pattern="^pay_"),
+            CallbackQueryHandler(start, pattern="^back_home$")
+        ],
         WAITING_SLIP: [
             MessageHandler(filters.PHOTO, receive_slip)
         ],
@@ -521,15 +533,10 @@ user_conv = ConversationHandler(
         WAITING_REF: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ref)
         ],
-        # Payment Method sub-conversation handling inside main flow for simplicity
-        # or we could link states. But here user flow:
-        # vip_buy -> warning -> choose_payment -> payment_methods -> pay_KBZ -> payment_info -> WAITING_SLIP
     },
     fallbacks=[
         CommandHandler("start", start),
         CallbackQueryHandler(start, pattern="^back_home$"),
-        CallbackQueryHandler(payment_methods, pattern="^choose_payment$"),
-        CallbackQueryHandler(payment_info, pattern="^pay_"),
     ]
 )
 
@@ -705,11 +712,13 @@ async def admin_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💳 Payment ပြင်ရန်", callback_data="admin_pay_edit")],
         [InlineKeyboardButton("🧩 ဖိတ်ခေါ် ကုဒ်", callback_data="admin_ref")],
     ]
-
-    await q.message.edit_text(
-        "🛠 ADMIN DASHBOARD",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+    
+    # Determine if called from command or callback
+    if update.message:
+        await update.message.reply_text("🛠 ADMIN DASHBOARD", reply_markup=InlineKeyboardMarkup(kb))
+    else:
+        await q.message.edit_text("🛠 ADMIN DASHBOARD", reply_markup=InlineKeyboardMarkup(kb))
+        
     return ConversationHandler.END
 
 # ============================================================
@@ -745,8 +754,11 @@ def register_admin_handlers(app):
     )
     app.add_handler(pay_conv)
 
-    app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
-    app.add_handler(CallbackQueryHandler(admin_payment_action, pattern="^admin_"))
+    # Register admin dashboard handler (Handles both start menu button and back button)
+    app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_dashboard|admin_back$"))
+    
+    # Register payment action (Only match ok/fail patterns to avoid value error)
+    app.add_handler(CallbackQueryHandler(admin_payment_action, pattern="^admin_(ok|fail)_"))
     
     # Placeholder for ref buttons
     app.add_handler(CallbackQueryHandler(ref_placeholder, pattern="^ref_"))
