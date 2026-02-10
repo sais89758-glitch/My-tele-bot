@@ -108,17 +108,20 @@ async def ref_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     choice = query.data  # ref_yes / ref_no
 
-  if choice == "ref_no":
-    await query.message.edit_text(
-        "✅ ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ。\n"
-        "Admin စစ်ဆေးပြီးပါက Bot မှတဆင့် အကြောင်းကြားပါမည်။"
-    )
-    return ConversationHandler.END
+    # ❌ Referral မရှိ
+    if choice == "ref_no":
+        await query.message.edit_text(
+            "✅ ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ。\n"
+            "Admin စစ်ဆေးပြီးပါက Bot မှတဆင့် အကြောင်းကြားပါမည်။"
+        )
+        return ConversationHandler.END
 
-elif choice == "ref_yes":
-    await query.message.edit_text("🔑 ဖိတ်ခေါ် ကုဒ် (၅ လုံး) ပို့ပေးပါ")
-    return WAITING_REF
-
+    # ✅ Referral ရှိ
+    elif choice == "ref_yes":
+        await query.message.edit_text(
+            "🔑 ဖိတ်ခေါ် ကုဒ် (၅ လုံး) ပို့ပေးပါ"
+        )
+        return WAITING_REF
 
 # ============================================================
 # START
