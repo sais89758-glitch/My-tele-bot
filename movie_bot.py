@@ -522,51 +522,134 @@ async def admin_ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "🧩 ဖိတ်ခေါ် ကုဒ် စနစ်\n\n"
-        "• Agent အသစ်ထည့်နိုင်\n"
-        "• Agent ရဲ့ ခေါ်ယူမှု ကြည့်နိုင်\n"
+        "➕ ဖိတ်ခေါ် (Agent) အသစ်ထည့်နိုင်\n"
+        "📋 သိမ်းထားတဲ့ နာမည် + ကုဒ် ကြည့်နိုင်\n"
+        "✏️ နာမည် / ကုဒ် ပြင်နိုင်\n"
+        "🗑️ ဖျတ်နိုင်\n"
     )
 
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]
-    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    kb = [
+        [InlineKeyboardButton("➕ ဖိတ်ခေါ်အသစ်", callback_data="ref_add")],
+        [InlineKeyboardButton("📋 ဖိတ်ခေါ်စာရင်း", callback_data="ref_list")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_back")]
+    ]
+
+    await q.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
 
 # ============================================================
 # 📢 ADS MENU
 # ============================================================
 
-async def admin_ads(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+async def ads_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_text("📸 Photo သို့မဟုတ် 🎥 Video ပို့ပါ (Caption ပါထည့်ရေးပေးပါ)")
+    return AD_MEDIA
 
-    text = (
-        "📢 ကြော်ညာ စနစ်\n\n"
-        "• Photo / Video တင်\n"
-        "• ရက် / နာရီ သတ်မှတ်\n"
-        "• Auto တင် / Auto ဖျက်\n"
-    )
+async def ads_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+    if msg.photo:
+        context.user_data["media"] = ("photo", msg.photo[-1].file_id, msg.caption or "")
+    elif msg.video:
+        context.user_data["media"] = ("video", msg.video.file_id, msg.caption or "")
+    else:
+        await msg.reply_text("Photo/Video ပို့ပေးပါ")
+        return AD_MEDIA
 
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]
-    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    await msg.reply_text("📅 ဘယ်နှစ်ရက်တင်မလဲ? (နံပါတ်သာရိုက်ပါ)")
+    return AD_DAYS
+
+async def ads_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.user_data["days"] = int(update.message.text)
+    except:
+        return AD_DAYS
+    await update.message.reply_text("⏱️ ဘယ်နှနာရီခြားတစ်ခါ တင်မလဲ? (နံပါတ်သာရိုက်ပါ)")
+    return AD_INTERVAL
+
+async def ads_interval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        hours = int(update.message.text)
+    except:
+        return AD_INTERVAL
+
+    media_type, file_id, caption = context.user_data["media"]
+    days = context.user_data["days"]
+    now = datetime.now()
+    end = now + timedelta(days=days)
+
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO ads(media_type,file_id,caption,total_days,interval_hours,next_post,end_at,active) VALUES(?,?,?,?,?,?,?,1)",
+                (media_type, file_id, caption, days, hours, now.isoformat(), end.isoformat()))
+    conn.commit()
+    conn.close()
+
+    await update.message.reply_text(f"✅ ကြော်ညာ schedule ပြီးပါပြီ")
+    return ConversationHandler.END
+
+async def post_ads_job(context: ContextTypes.DEFAULT_TYPE):
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    now = datetime.now()
+    cur.execute("SELECT id, media_type, file_id, caption, interval_hours, end_at FROM ads WHERE active=1 AND next_post <= ?", (now.isoformat(),))
+    ads = cur.fetchall()
+    
+    for ad in ads:
+        ad_id, m_type, f_id, cap, interval, end_str = ad
+        try:
+            if m_type == "photo": await context.bot.send_photo(chat_id=CHANNEL_USERNAME, photo=f_id, caption=cap)
+            else: await context.bot.send_video(chat_id=CHANNEL_USERNAME, video=f_id, caption=cap)
+        except: pass
+            
+        next_time = now + timedelta(hours=interval)
+        if now >= datetime.fromisoformat(end_str): cur.execute("UPDATE ads SET active=0 WHERE id=?", (ad_id,))
+        else: cur.execute("UPDATE ads SET next_post=? WHERE id=?", (next_time.isoformat(), ad_id))
+    conn.commit()
+    conn.close()
 
 # ============================================================
 # 💳 PAYMENT EDIT
 # ============================================================
 
-async def admin_pay_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+async def pay_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    kb = [
+        [InlineKeyboardButton("KBZ", callback_data="edit_KBZ")],
+        [InlineKeyboardButton("Wave", callback_data="edit_WAVE")],
+        [InlineKeyboardButton("AYA", callback_data="edit_AYA")],
+        [InlineKeyboardButton("CB", callback_data="edit_CB")],
+        [InlineKeyboardButton("Back", callback_data="admin_dashboard")]
+    ]
+    await query.message.edit_text("💳 ပြင်လိုသော Payment ရွေးပါ", reply_markup=InlineKeyboardMarkup(kb))
 
-    text = (
-        "💳 Payment ပြင်ရန်\n\n"
-        "• KBZ Pay\n"
-        "• Wave Pay\n"
-        "• AYA Pay\n"
-        "• CB Pay\n\n"
-        "ဖုန်း / အမည် ပြင်နိုင်ပါသည်"
-    )
+async def pay_phone_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["edit_method"] = query.data.split("_")[1]
+    await query.message.delete()
+    await query.message.chat.send_message("📱 ဖုန်းနံပါတ် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုလျှင် /skip)")
+    return PAY_PHONE
 
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]
-    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+async def pay_phone_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    context.user_data["new_phone"] = text if text != "/skip" else None
+    await update.message.reply_text("👤 အကောင့်နာမည် အသစ်ရိုက်ထည့်ပါ (မပြင်လိုလျှင် /skip)")
+    return PAY_NAME_EDIT
 
+async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    new_name = update.message.text if update.message.text != "/skip" else None
+    method, new_phone = context.user_data["edit_method"], context.user_data.get("new_phone")
+    conn = sqlite3.connect(DB_NAME); cur = conn.cursor()
+    if new_phone: cur.execute("UPDATE payment_settings SET phone=? WHERE method=?", (new_phone, method))
+    if new_name: cur.execute("UPDATE payment_settings SET name=? WHERE method=?", (new_name, method))
+    conn.commit(); conn.close()
+    await update.message.reply_text("✅ သိမ်းဆည်းပြီးပါပြီ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="admin_dashboard")]]))
+    return ConversationHandler.END
 # ============================================================
 # 🔙 BACK TO DASHBOARD
 # ============================================================
