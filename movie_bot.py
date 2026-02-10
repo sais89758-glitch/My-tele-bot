@@ -462,6 +462,34 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]
     await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    
+# ============================================================
+# USER CONVERSATION HANDLER
+# ============================================================
+
+user_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(vip_warning, pattern="^vip_buy$")
+    ],
+    states={
+        WAITING_SLIP: [
+            MessageHandler(filters.PHOTO, receive_slip)
+        ],
+        WAITING_NAME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)
+        ],
+        WAITING_REF_CHOICE: [
+            CallbackQueryHandler(ref_choice, pattern="^(ref_yes|ref_no)$")
+        ],
+        WAITING_REF: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ref)
+        ],
+    },
+    fallbacks=[
+        CommandHandler("start", start),
+        CallbackQueryHandler(start, pattern="^back_home$")
+    ]
+)
 
 # ============================================================
 # 🧩 REFERRAL MENU
@@ -557,6 +585,7 @@ def register_admin_handlers(app):
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(user_conv)
 
     # ======================
     # USER SIDE (မဖြစ်မနေလို)
