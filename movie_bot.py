@@ -100,7 +100,8 @@ def init_db():
 # STATES
 # ============================================================
 
-WAITING_SLIP, WAITING_NAME, ASK_REF, WAITING_REF = range(4)
+WAITING_SLIP, WAITING_NAME, WAITING_REF_CHOICE, WAITING_REF = range(1, 5)
+
 
 # ============================================================
 # START
