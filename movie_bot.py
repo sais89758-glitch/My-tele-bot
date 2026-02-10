@@ -406,46 +406,62 @@ async def tharngal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📊 STATS / REVENUE
 # ============================================================
 
+import calendar
+from datetime import datetime
+
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
+    now = datetime.now()
+    year = now.year
+    month = now.month
+
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
 
-    today = datetime.now().date().isoformat()
-    month = datetime.now().strftime("%Y-%m")
+    # approved payments grouped by day
+    cur.execute("""
+        SELECT 
+            strftime('%d', created_at) AS day,
+            SUM(amount)
+        FROM payments
+        WHERE status='APPROVED'
+          AND strftime('%Y', created_at)=?
+          AND strftime('%m', created_at)=?
+        GROUP BY day
+    """, (str(year), f"{month:02d}"))
 
-    cur.execute(
-        "SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND date(created_at)=?",
-        (today,)
-    )
-    today_income = cur.fetchone()[0] or 0
-
-    cur.execute(
-        "SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND strftime('%Y-%m', created_at)=?",
-        (month,)
-    )
-    month_income = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED'")
-    total_income = cur.fetchone()[0] or 0
-
-    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
-    vip_count = cur.fetchone()[0] or 0
-
+    rows = cur.fetchall()
     conn.close()
 
-    text = (
-        "📊 ဝင်ငွေ စာရင်း\n\n"
-        f"💰 ယနေ့ ဝင်ငွေ : {today_income} MMK\n"
-        f"📆 ယခုလ ဝင်ငွေ : {month_income} MMK\n"
-        f"🏦 စုစုပေါင်း ဝင်ငွေ : {total_income} MMK\n\n"
-        f"👑 VIP စုစုပေါင်း : {vip_count} ယောက်"
-    )
+    income_by_day = {int(d): amt for d, amt in rows}
+
+    cal = calendar.monthcalendar(year, month)
+
+    text = f"📅 **{calendar.month_name[month]} {year} ဝင်ငွေစာရင်း**\n\n"
+    text += "Mo Tu We Th Fr Sa Su\n"
+
+    for week in cal:
+        for day in week:
+            if day == 0:
+                text += "   "
+            else:
+                amt = income_by_day.get(day, 0)
+                if amt > 0:
+                    text += f"{day:02d}* "
+                else:
+                    text += f"{day:02d}  "
+        text += "\n"
+
+    text += "\n📌 * = ဝင်ငွေရှိ\n\n"
+    text += "💰 **နေ့စဉ်အသေးစိတ်**\n"
+
+    for d in sorted(income_by_day):
+        text += f"• {d:02d} ရက် → {income_by_day[d]} MMK\n"
 
     kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_back")]]
-    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 # ============================================================
 # 🧩 REFERRAL MENU
