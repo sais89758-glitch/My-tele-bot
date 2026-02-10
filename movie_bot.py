@@ -536,7 +536,16 @@ def register_admin_handlers(app):
 
     app.add_handler(user_conv)
 
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # register admin + user handlers
+    register_admin_handlers(app)
+
+    print("Bot Started...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
