@@ -253,7 +253,7 @@ async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_SLIP
 
     context.user_data["slip"] = file_id
-    await update.message.reply_text("👤 သင့်ငွေလွှဲအကောင့်အမည် (Kpay Name) ရေးပို့ပေးပါ")
+    await update.message.reply_text("👤 သင့်ငွေလွှဲအကောင့်အမည်ပို့ပေးပါ")
     return WAITING_NAME
 
 async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
