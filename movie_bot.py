@@ -28,7 +28,7 @@ from telegram.ext import (
 # CONFIG
 # ============================================================
 
-BOT_TOKEN = "8515688348:AAHgjWNZuQVgTNQmyCwHJPngiW2it9Jckts"
+BOT_TOKEN = "8515688348:AAHmZOg6T_xJqL7KNAy4vuRIL0Y48UziJ0k"
 
 ADMIN_ID = 6445257462
 MAIN_CHANNEL_URL = "https://t.me/ZanchannelMM"
@@ -253,7 +253,7 @@ async def receive_slip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_SLIP
 
     context.user_data["slip"] = file_id
-    await update.message.reply_text("👤 သင့်ငွေလွှဲအကောင့်အမည်ပို့ပေးပါ")
+    await update.message.reply_text("👤 သင့်ငွေလွှဲအကောင့်အမည် (Kpay Name) ရေးပို့ပေးပါ")
     return WAITING_NAME
 
 async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -750,7 +750,10 @@ def main():
     # --- User Conversation ---
     user_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(vip_warning, pattern="^vip_buy$")
+            CallbackQueryHandler(vip_warning, pattern="^vip_buy$"),
+            # ADDED: Handle orphan buttons for smoother UX (Fixes "Not working" issue)
+            CallbackQueryHandler(payment_methods, pattern="^choose_payment$"),
+            CallbackQueryHandler(payment_info, pattern="^pay_")
         ],
         states={
             VIP_CHOICE: [
