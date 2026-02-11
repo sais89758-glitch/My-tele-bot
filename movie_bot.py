@@ -1,11 +1,12 @@
 # ============================================================
-# Zan Movie Channel Bot – FULL FIXED VERSION
+# Zan Movie Channel Bot – FULL FIXED VERSION (REVENUE UPDATE)
 # ============================================================
 
 import logging
 import sqlite3
 import random
 import string
+import calendar
 from datetime import datetime, timedelta
 
 from telegram import (
@@ -177,7 +178,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.answer()
             await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
         except:
-            pass # Message might be too old
+            pass 
     
     return ConversationHandler.END
 
@@ -277,9 +278,7 @@ async def ref_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = query.data  # ref_yes / ref_no
 
     if choice == "ref_no":
-        # ⚠️ CRITICAL FIX: Notify admin even if no ref code
         await notify_admin(context, update.effective_user.id, "None")
-        
         await query.message.edit_text(
             "✅ ငွေပေးချေမှုကို အတည်ပြုရန် Admin အား အကြောင်းကြားပြီးပါပြီ။\n"
             "Admin စစ်ဆေးပြီးပါက Bot မှတဆင့် Link ပို့ပေးပါမည်။"
@@ -371,7 +370,6 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
     
-    # Check if already processed
     cur.execute("SELECT status FROM payments WHERE user_id=? AND status='PENDING'", (uid,))
     pending = cur.fetchone()
 
@@ -381,64 +379,27 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     if action == "ok":
-        # 1️⃣ VIP expiry (30 days)
         expiry = datetime.now() + timedelta(days=30)
-
-        cur.execute(
-            "INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?,?,?)",
-            (uid, 1, expiry.isoformat())
-        )
-        cur.execute(
-            "UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'",
-            (uid,)
-        )
+        cur.execute("INSERT OR REPLACE INTO users (user_id, is_vip, vip_expiry) VALUES (?,?,?)", (uid, 1, expiry.isoformat()))
+        cur.execute("UPDATE payments SET status='APPROVED' WHERE user_id=? AND status='PENDING'", (uid,))
         conn.commit()
 
-        # 2️⃣ Create Invite Link
         try:
             invite = await context.bot.create_chat_invite_link(
-                chat_id=VIP_CHANNEL_ID,
-                member_limit=1,
-                expire_date=int(expiry.timestamp())
+                chat_id=VIP_CHANNEL_ID, member_limit=1, expire_date=int(expiry.timestamp())
             )
-            
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("👑 VIP Channel သို့ဝင်ရန်", url=invite.invite_link)]
-            ])
-
-            await context.bot.send_message(
-                chat_id=uid,
-                text=(
-                    "🎉 **VIP အောင်မြင်ပါသည်**\n\n"
-                    "အောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇"
-                ),
-                parse_mode="Markdown",
-                reply_markup=kb
-            )
-            # Update Admin Message
-            new_caption = q.message.caption + "\n\n✅ STATUS: APPROVED"
-            await q.message.edit_caption(caption=new_caption)
-
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("👑 VIP Channel သို့ဝင်ရန်", url=invite.invite_link)]])
+            await context.bot.send_message(chat_id=uid, text="🎉 **VIP အောင်မြင်ပါသည်**\n\nအောက်ကခလုတ်ကိုနှိပ်ပြီး VIP Channel သို့ဝင်ပါ 👇", parse_mode="Markdown", reply_markup=kb)
+            await q.message.edit_caption(caption=q.message.caption + "\n\n✅ STATUS: APPROVED")
         except Exception as e:
             log.error(f"Invite Link Error: {e}")
             await context.bot.send_message(chat_id=uid, text="VIP Approved but Error creating link. Please contact Admin directly.")
-            await q.message.reply_text(f"Error creating link: {e}")
 
     else:
-        # ❌ Reject
-        cur.execute(
-            "UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'",
-            (uid,)
-        )
+        cur.execute("UPDATE payments SET status='REJECTED' WHERE user_id=? AND status='PENDING'", (uid,))
         conn.commit()
-
-        await context.bot.send_message(
-            chat_id=uid,
-            text="❌ သင့်ငွေပေးချေမှု မအောင်မြင်ပါ (Rejected)။ အသေးစိတ်သိရှိလိုပါက Admin ကို ဆက်သွယ်ပါ။"
-        )
-        # Update Admin Message
-        new_caption = q.message.caption + "\n\n❌ STATUS: REJECTED"
-        await q.message.edit_caption(caption=new_caption)
+        await context.bot.send_message(chat_id=uid, text="❌ သင့်ငွေပေးချေမှု မအောင်မြင်ပါ (Rejected)။")
+        await q.message.edit_caption(caption=q.message.caption + "\n\n❌ STATUS: REJECTED")
 
     conn.close()
 
@@ -447,10 +408,7 @@ async def admin_payment_action(update: Update, context: ContextTypes.DEFAULT_TYP
 # ============================================================
 
 async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Check Admin
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        return
+    if update.effective_user.id != ADMIN_ID: return
 
     kb = [
         [InlineKeyboardButton("📊 ဝင်ငွေ / စာရင်း", callback_data="admin_stats")],
@@ -469,9 +427,65 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
-# --- REVENUE STATS ---
-import calendar
+# --- REVENUE STATS (IMPROVED) ---
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    month_str = now.strftime("%Y-%m")
+
+    # 1. Income Summary
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND strftime('%Y-%m-%d', created_at) = ?", (today_str,))
+    income_today = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED' AND strftime('%Y-%m', created_at) = ?", (month_str,))
+    income_month = cur.fetchone()[0] or 0
+
+    cur.execute("SELECT SUM(amount) FROM payments WHERE status='APPROVED'")
+    income_total = cur.fetchone()[0] or 0
+
+    # 2. VIP Status
+    cur.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
+    vip_count = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='PENDING'")
+    pending_count = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM payments WHERE status='REJECTED'")
+    rejected_count = cur.fetchone()[0]
+
+    conn.close()
+
+    text = f"""
+📊 **ငွေစာရင်း ချုပ် (Summary)**
+
+📅 **ဝင်ငွေ (Income)**
+• ယနေ့: {income_today:,} MMK
+• ဒီလ: {income_month:,} MMK
+• စုစုပေါင်း: {income_total:,} MMK
+
+👥 **VIP အခြေအနေ**
+• လက်ရှိ VIP: {vip_count} ယောက်
+• စစ်ဆေးဆဲ (Pending): {pending_count}
+• ပယ်ချထားသူ (Rejected): {rejected_count}
+    """
+    
+    kb = [
+        [InlineKeyboardButton("📅 နေ့စဉ် ဝင်ငွေ (Calendar)", callback_data="stats_daily")],
+        [InlineKeyboardButton("📋 ငွေလွှဲ စာရင်း (Records)", callback_data="stats_records_all")],
+        [InlineKeyboardButton("⏳ Pending ကြည့်ရန်", callback_data="stats_records_pending")],
+        [InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard")]
+    ]
+    
+    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def stats_daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
@@ -481,34 +495,73 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = sqlite3.connect(DB_NAME)
     cur = conn.cursor()
-
     cur.execute("""
-        SELECT 
-            strftime('%d', created_at) AS day,
-            SUM(amount)
+        SELECT strftime('%d', created_at) AS day, SUM(amount)
         FROM payments
-        WHERE status='APPROVED'
-          AND strftime('%Y', created_at)=?
-          AND strftime('%m', created_at)=?
+        WHERE status='APPROVED' AND strftime('%Y', created_at)=? AND strftime('%m', created_at)=?
         GROUP BY day
     """, (str(year), f"{month:02d}"))
-
     rows = cur.fetchall()
     conn.close()
 
     income_by_day = {int(d): amt for d, amt in rows}
-    total_income = sum(income_by_day.values())
+    
+    text = f"📅 **{calendar.month_name[month]} {year} နေ့စဉ်စာရင်း**\n\n"
+    
+    # Simple list view sorted by date
+    if not income_by_day:
+        text += "❌ ဒီလအတွက် ဝင်ငွေ မရှိသေးပါ။"
+    else:
+        for day in range(1, 32):
+            try:
+                # Check if valid day for this month
+                datetime(year, month, day)
+                amt = income_by_day.get(day, 0)
+                if amt > 0:
+                    text += f"✅ {day:02d} ရက်: {amt:,} MMK\n"
+                else:
+                    text += f"▫️ {day:02d} ရက်: 0 MMK\n"
+            except ValueError:
+                break # End of month
 
-    text = f"📅 **{calendar.month_name[month]} {year} ဝင်ငွေစာရင်း**\n"
-    text += f"💵 Total: {total_income} MMK\n\n"
+    kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_stats")]]
+    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-    for d in sorted(income_by_day):
-        text += f"• {d:02d} ရက် → {income_by_day[d]} MMK\n"
-
+async def stats_records_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    
+    mode = q.data.split("_")[-1] # all or pending
+    
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    
+    if mode == "pending":
+        cur.execute("SELECT * FROM payments WHERE status='PENDING' ORDER BY id DESC LIMIT 20")
+        title = "⏳ **PENDING LIST** (Latest 20)"
+    else:
+        cur.execute("SELECT * FROM payments ORDER BY id DESC LIMIT 20")
+        title = "📋 **ALL TRANSACTIONS** (Latest 20)"
+        
+    rows = cur.fetchall()
+    conn.close()
+    
+    text = f"{title}\n\n"
     if not rows:
-        text += "No income yet this month."
-
-    kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard")]]
+        text += "No records found."
+    else:
+        for row in rows:
+            date_short = row['created_at'].split("T")[0]
+            status_icon = "✅" if row['status'] == "APPROVED" else "❌" if row['status'] == "REJECTED" else "⏳"
+            text += (
+                f"{status_icon} `{row['user_id']}` | {row['amount']} MMK\n"
+                f"💳 {row['method']} | 👤 {row['account_name']}\n"
+                f"📅 {date_short} | Ref: {row['ref_code']}\n"
+                f"-----------------------------\n"
+            )
+            
+    kb = [[InlineKeyboardButton("🔙 Back", callback_data="admin_stats")]]
     await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 # --- ADS SYSTEM ---
@@ -620,7 +673,6 @@ async def pay_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_NAME) 
     cur = conn.cursor()
     
-    # Ensure row exists
     cur.execute("INSERT OR IGNORE INTO payment_settings (method, phone, name) VALUES (?, ?, ?)", (method, DEFAULT_PHONE, DEFAULT_NAME))
     
     if new_phone: cur.execute("UPDATE payment_settings SET phone=? WHERE method=?", (new_phone, method))
@@ -650,7 +702,6 @@ async def ref_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ref_save_agent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agent_name = update.message.text
-    # Generate random 5 digit code
     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
     
     conn = sqlite3.connect(DB_NAME)
@@ -721,7 +772,7 @@ def main():
             ],
             WAITING_REF: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_ref),
-                CallbackQueryHandler(ref_choice, pattern="^(ref_yes|ref_no)$") # Handle back/skip inside state
+                CallbackQueryHandler(ref_choice, pattern="^(ref_yes|ref_no)$") 
             ],
         },
         fallbacks=[
@@ -763,7 +814,7 @@ def main():
 
     # --- Handlers Registration ---
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("tharngal", admin_dashboard)) # Secret admin command
+    app.add_handler(CommandHandler("tharngal", admin_dashboard)) 
     
     app.add_handler(user_conv)
     app.add_handler(ads_conv)
@@ -773,6 +824,8 @@ def main():
     # Admin Menu Navigation
     app.add_handler(CallbackQueryHandler(admin_dashboard, pattern="^admin_dashboard$"))
     app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
+    app.add_handler(CallbackQueryHandler(stats_daily, pattern="^stats_daily$"))
+    app.add_handler(CallbackQueryHandler(stats_records_view, pattern="^stats_records_"))
     app.add_handler(CallbackQueryHandler(admin_payment_action, pattern="^admin_(ok|fail)_"))
     
     # Ref Menu Handlers
